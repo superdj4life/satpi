@@ -4,8 +4,6 @@
 # Author: Andreas Horvath
 # Project: Autonomous, Config-driven satellite reception pipeline for Raspberry Pi
 
-#!/usr/bin/env python3
-
 import argparse
 import logging
 import os
@@ -14,6 +12,7 @@ import subprocess
 from pathlib import Path
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import shutil
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -38,11 +37,21 @@ def parse_args():
 def parse_utc(ts: str) -> datetime:
     return datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
+
+def to_local_dt(utc_timestamp: str, timezone_name: str) -> datetime:
+    utc_dt = parse_utc(utc_timestamp)
+    return utc_dt.astimezone(ZoneInfo(timezone_name))
+
+
+def format_local_filename_timestamp(utc_timestamp: str, timezone_name: str) -> str:
+    local_dt = to_local_dt(utc_timestamp, timezone_name)
+    return local_dt.strftime("%Y-%m-%d_%H-%M-%S")
+
+
 def safe_name(value: str) -> str:
     value = value.strip().replace(" ", "_").replace("/", "_")
     value = value.replace(":", "-")
     return value
-
 
 def setup_logger(log_file: str) -> logging.Logger:
     logger = logging.getLogger("satpi.receive_pass")
@@ -60,7 +69,6 @@ def setup_logger(log_file: str) -> logging.Logger:
     logger.addHandler(console_handler)
 
     return logger
-
 
 def build_satdump_command(config, args, pass_output_dir):
     hardware = config["hardware"]
@@ -81,7 +89,7 @@ def build_satdump_command(config, args, pass_output_dir):
         "--source",
         "rtlsdr",
         "--source_id",
-        "00000001",
+        str(source_id),
         "--samplerate",
         sample_rate,
         "--frequency",
@@ -92,7 +100,7 @@ def build_satdump_command(config, args, pass_output_dir):
 
     return cmd, live_pipeline
 
-def decode_image(config, logger, pass_output_dir):
+def decode_image(config, logger, args, pass_output_dir):
     decode_cfg = config["decode"]
     satdump = config["satdump"]
 
@@ -100,7 +108,7 @@ def decode_image(config, logger, pass_output_dir):
         logger.info("Decode disabled in config")
         return False
 
-    cadu_file = os.path.join(pass_output_dir, "meteor_m2-x_lrpt.cadu")
+    cadu_file = os.path.join(pass_output_dir, f"{args.pipeline}.cadu")
 
     if not os.path.exists(cadu_file):
         logger.info("No CADU file found: %s", cadu_file)
@@ -120,7 +128,7 @@ def decode_image(config, logger, pass_output_dir):
     decode_log_path = os.path.join(pass_output_dir, "decode.log")
     decode_cmd = [
         satdump["binary"],
-        "meteor_m2-x_lrpt",
+        args.pipeline,
         "cadu",
         cadu_file,
         pass_output_dir,
@@ -228,7 +236,7 @@ def copy_output(config, logger, pass_output_dir):
     return False, None, None
 
 
-def send_notification(config, logger, satellite, pass_output_dir, link):
+def send_notification(config, logger, args, pass_output_dir, link):
     notify_cfg = config["notify"]
 
     if not notify_cfg["enabled"]:
@@ -247,12 +255,12 @@ def send_notification(config, logger, satellite, pass_output_dir, link):
         logger.error("mail binary not found: %s", mail_bin)
         return False
 
-    cadu_file = os.path.join(pass_output_dir, "meteor_m2-x_lrpt.cadu")
+    cadu_file = os.path.join(pass_output_dir, f"{args.pipeline}.cadu")
     size_mb = 0
     if os.path.exists(cadu_file):
         size_mb = round(os.path.getsize(cadu_file) / (1024 * 1024), 2)
 
-    subject = f"{subject_prefix} {satellite} images received, cadu size = {size_mb} MB"
+    subject = f"{subject_prefix} {args.satellite} images received, cadu size = {size_mb} MB"
 
     if link:
         body = f"Output link:\n{link}\n"
@@ -281,7 +289,6 @@ def send_notification(config, logger, satellite, pass_output_dir, link):
 
     return True
 
-
 def postprocess_output(config, logger, args, pass_output_dir, decode_ok):
     if not decode_ok:
         logger.info("Decode not successful, skipping copy and notification")
@@ -296,7 +303,7 @@ def postprocess_output(config, logger, args, pass_output_dir, decode_ok):
         logger.info("Copy failed, skipping notification")
         return
 
-    notify_ok = send_notification(config, logger, args.satellite, pass_output_dir, link)
+    notify_ok = send_notification(config, logger, args, pass_output_dir, link)
     logger.info("notify_ok=%s", notify_ok)
 
 def main():
@@ -317,7 +324,12 @@ def main():
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
 
-    pass_id = f"{safe_name(args.pass_start)}_{safe_name(args.satellite)}"
+    subject = f"{subject_prefix} {args.satellite} images received, cadu size = {size_mb} MB"
+
+    timezone_name = config["station"]["timezone"]
+    local_pass_start = format_local_filename_timestamp(args.pass_start, timezone_name)
+
+    pass_id = f"{local_pass_start}_{safe_name(args.satellite)}"
     pass_output_dir = os.path.join(output_dir, pass_id)
     os.makedirs(pass_output_dir, exist_ok=True)
 
@@ -333,6 +345,10 @@ def main():
     logger.info("pass_end=%s", args.pass_end)
     logger.info("scheduled_start=%s", args.scheduled_start)
     logger.info("scheduled_end=%s", args.scheduled_end)
+    logger.info("local_pass_start=%s", to_local_dt(args.pass_start, timezone_name).strftime("%Y-%m-%d %H:%M:%S %Z"))
+    logger.info("local_pass_end=%s", to_local_dt(args.pass_end, timezone_name).strftime("%Y-%m-%d %H:%M:%S %Z"))
+    logger.info("local_scheduled_start=%s", to_local_dt(args.scheduled_start, timezone_name).strftime("%Y-%m-%d %H:%M:%S %Z"))
+    logger.info("local_scheduled_end=%s", to_local_dt(args.scheduled_end, timezone_name).strftime("%Y-%m-%d %H:%M:%S %Z"))
     logger.info("pass_output_dir=%s", pass_output_dir)
     logger.info("hostname=%s", os.uname().nodename)
     logger.info("user=%s", os.environ.get("USER", "unknown"))
@@ -411,7 +427,7 @@ def main():
 
     if stopped_by_scheduler and return_code in (-15, 0):
         logger.info("SatDump was stopped intentionally by scheduler")
-        decode_ok = decode_image(config, logger, pass_output_dir)
+        decode_ok = decode_image(config, logger, args, pass_output_dir)
         logger.info("decode_ok=%s", decode_ok)
         postprocess_output(config, logger, args, pass_output_dir, decode_ok)
         logger.info("receive_pass.py finished successfully")
