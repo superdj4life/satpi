@@ -5,6 +5,8 @@ tle/*.tle
 data/passes.json
 data/state.json
 systemd/generated/
+systemd/satpi-refresh.service
+systemd/satpi-refresh.timer
 __pycache__/
 *.pyc
 testdata/
