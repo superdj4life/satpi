@@ -110,3 +110,5 @@ python3 bin/schedule_passes.py
 python3 bin/generate_refresh_units.py
 
 systemctl list-timers --all | grep satpi
+
+7. Have fun!
