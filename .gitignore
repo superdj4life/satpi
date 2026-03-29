@@ -1,0 +1,10 @@
+config/config.ini
+logs/
+output/
+data/passes.json
+data/state.json
+systemd/generated/
+__pycache__/
+*.pyc
+testdata/
+*.log

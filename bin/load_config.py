@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+# satpi
+# Loads and validates the satpi configuration file.
+# Author: Andreas Horvath
+# Project: Autonomous, Config-driven satellite reception pipeline for Raspberry Pi
+
+import configparser
+import os
+from typing import Dict, Any, List
+
+
+class ConfigError(Exception):
+    pass
+
+
+def load_config(path: str) -> Dict[str, Any]:
+    if not os.path.exists(path):
+        raise ConfigError(f"Config file not found: {path}")
+
+    parser = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
+    parser.read(path)
+
+    config = {}
+
+    config["station"] = _parse_station(parser)
+    config["qth"] = _parse_qth(parser)
+    config["paths"] = _parse_paths(parser)
+    config["hardware"] = _parse_hardware(parser)
+    config["satellites"] = _parse_satellites(parser)
+    config["satdump"] = _parse_satdump(parser)
+    config["scheduling"] = _parse_scheduling(parser)
+    config["network"] = _parse_network(parser)
+    config["decode"] = _parse_decode(parser)
+    config["copytarget"] = _parse_copytarget(parser)
+    config["notify"] = _parse_notify(parser)
+    config["debug"] = _parse_debug(parser)
+    config["systemd"] = _parse_systemd(parser)
+    _validate_config(config)
+
+    return config
+
+
+# ==============================
+# SECTION PARSERS
+# ==============================
+
+def _parse_station(p):
+    return {
+        "name": p.get("station", "name", fallback="satpi"),
+        "timezone": p.get("station", "timezone", fallback="UTC"),
+        "log_level": p.get("station", "log_level", fallback="INFO"),
+    }
+
+
+def _parse_qth(p):
+    return {
+        "latitude": p.getfloat("qth", "latitude"),
+        "longitude": p.getfloat("qth", "longitude"),
+        "altitude": p.getfloat("qth", "altitude_m", fallback=0),
+    }
+
+
+def _parse_paths(p):
+    return {
+        "base_dir": p.get("paths", "base_dir"),
+        "pass_file": p.get("paths", "pass_file"),
+        "state_file": p.get("paths", "state_file"),
+        "log_dir": p.get("paths", "log_dir"),
+        "output_dir": p.get("paths", "output_dir"),
+        "generated_units_dir": p.get("paths", "generated_units_dir"),
+    }
+
+def _parse_hardware(p):
+    return {
+        "device_index": p.getint("hardware", "device_index", fallback=0),
+        "device_serial": p.get("hardware", "device_serial", fallback=None),
+        "source_id": p.get("hardware", "source_id", fallback=None),
+        "gain": p.getfloat("hardware", "gain", fallback=0),
+        "sample_rate": float(p.get("hardware", "sample_rate", fallback="2.4e6")),
+        "bias_t": p.getboolean("hardware", "bias_t", fallback=False),
+        "ppm": p.getint("hardware", "ppm_correction", fallback=0),
+    }
+
+
+def _parse_satellites(p) -> List[Dict[str, Any]]:
+    satellites = []
+
+    for section in p.sections():
+        if not section.startswith("satellite."):
+            continue
+
+        name = section.split(".", 1)[1]
+        s = p[section]
+
+        satellites.append({
+            "name": name,
+            "enabled": s.getboolean("enabled", fallback=True),
+            "min_elevation": s.getint("min_elevation_deg", fallback=0),
+            "frequency": s.getint("frequency_hz"),
+            "bandwidth": s.getint("bandwidth_hz"),
+            "pipeline": s.get("pipeline"),
+        })
+
+    return satellites
+
+
+def _parse_satdump(p):
+    return {
+        "enabled": p.getboolean("satdump", "enabled", fallback=True),
+        "binary": p.get("satdump", "binary_path"),
+        "threads": p.getint("satdump", "threads", fallback=1),
+        "realtime": p.getboolean("satdump", "realtime", fallback=True),
+    }
+
+def _parse_scheduling(p):
+    return {
+        "frequency": p.get("scheduling", "pass_update_frequency", fallback="DAILY"),
+        "time": p.get("scheduling", "pass_update_time", fallback="00:00"),
+        "weekday": p.get("scheduling", "pass_update_weekday", fallback="MONDAY"),
+        "pre_start": p.getint("scheduling", "pre_start_seconds", fallback=120),
+        "post_stop": p.getint("scheduling", "post_stop_seconds", fallback=60),
+        "max_pass_age_hours": p.getint("scheduling", "max_pass_age_hours", fallback=24),
+    }
+
+def _parse_network(p):
+    return {
+        "use_vpn": p.getboolean("network", "use_vpn", fallback=False),
+        "vpn_interface": p.get("network", "vpn_interface", fallback="proton"),
+        "vpn_start": p.get("network", "vpn_start_command", fallback=None),
+        "vpn_stop": p.get("network", "vpn_stop_command", fallback=None),
+        "tle_url": p.get("network", "tle_url"),
+        "tle_file": p.get("network", "tle_file"),
+        "tle_timeout": p.getint("network", "tle_timeout_seconds", fallback=30),
+    }
+
+def _parse_decode(p):
+    return {
+        "enabled": p.getboolean("decode", "enabled", fallback=True),
+        "min_cadu_size_bytes": p.getint("decode", "min_cadu_size_bytes", fallback=1048576),
+        "success_dir_relpath": p.get(
+            "decode",
+            "success_dir_relpath",
+            fallback="MSU-MR",
+        ),
+    }
+
+def _parse_copytarget(p):
+    return {
+        "enabled": p.getboolean("copytarget", "enabled", fallback=False),
+        "type": p.get("copytarget", "type", fallback="local"),
+        "local_path": p.get("copytarget", "local_path", fallback=None),
+        "remote_user": p.get("copytarget", "remote_user", fallback=None),
+        "remote_host": p.get("copytarget", "remote_host", fallback=None),
+        "remote_path": p.get("copytarget", "remote_path", fallback=None),
+        "ssh_port": p.getint("copytarget", "ssh_port", fallback=22),
+        "rclone_remote": p.get("copytarget", "rclone_remote", fallback=None),
+        "rclone_path": p.get("copytarget", "rclone_path", fallback=None),
+        "create_link": p.getboolean("copytarget", "create_link", fallback=False),
+    }
+
+def _parse_notify(p):
+    return {
+        "enabled": p.getboolean("notify", "enabled", fallback=False),
+        "mail_to": p.get("notify", "mail_to", fallback=None),
+        "mail_subject_prefix": p.get("notify", "mail_subject_prefix", fallback="SATPI"),
+        "mail_bin": p.get("notify", "mail_bin", fallback="/usr/bin/msmtp"),
+    }
+
+def _parse_debug(p):
+    return {
+        "dry_run": p.getboolean("debug", "dry_run", fallback=False),
+        "verbose": p.getboolean("debug", "verbose_logging", fallback=False),
+    }
+
+def _parse_systemd(p):
+    return {
+        "service_user": p.get("systemd", "service_user", fallback=None),
+        "python_bin": p.get("systemd", "python_bin", fallback="/usr/bin/python3"),
+    }
+
+# ==============================
+# VALIDATION
+# ==============================
+
+def _validate_config(cfg: Dict[str, Any]):
+    if not cfg["satellites"]:
+        raise ConfigError("No satellites defined")
+
+    active = [s for s in cfg["satellites"] if s["enabled"]]
+    if not active:
+        raise ConfigError("No enabled satellites")
+
+    for sat in active:
+        if sat["frequency"] <= 0:
+            raise ConfigError(f"Invalid frequency for {sat['name']}")
+
+    # Paths must exist (except files)
+    for key in ["base_dir", "log_dir", "output_dir"]:
+        path = cfg["paths"][key]
+        if not os.path.isdir(path):
+            raise ConfigError(f"Directory does not exist: {path}")
+
+    # SatDump binary check
+    if cfg["satdump"]["enabled"]:
+        binary = cfg["satdump"]["binary"]
+        if not os.path.exists(binary):
+            raise ConfigError(f"SatDump binary not found: {binary}")

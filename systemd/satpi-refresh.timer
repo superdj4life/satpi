@@ -1,0 +1,10 @@
+[Unit]
+Description=Run SATPI refresh on schedule
+
+[Timer]
+OnCalendar=*-*-* 00:00:00
+Persistent=true
+Unit=satpi-refresh.service
+
+[Install]
+WantedBy=timers.target
