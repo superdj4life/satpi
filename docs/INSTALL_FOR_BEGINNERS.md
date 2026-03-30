@@ -11,13 +11,11 @@ You need:
 - a Raspberry Pi 4 or Raspberry Pi 5 (the latter with a cooling fan)
 - a suitable power supply for your Raspberry Pi
 - a microSD card
-- a computer with Windows or macOS
+- a computer with Windows or macOS (to setup the SD Card initially)
 - an internet connection
 - an RTL-SDR compatible USB receiver
-- an antenna suitable for weather satellite reception
-- optionally an LNA and Bias-T if your antenna setup needs it
-
-For a simple headless setup, you do not need a monitor, keyboard, or mouse if you preconfigure the Raspberry Pi image with Raspberry Pi Imager.  [oai_citation:1‡Raspberry Pi](https://www.raspberrypi.com/documentation/computers/getting-started.html?utm_source=chatgpt.com)
+- an antenna suitable for weather satellite reception (best is a QFH antenna, but a V-dipol is fine for testing and you should be able to receive signals)
+- optionally an LNA and Bias-T if your antenna setup needs it. With the Raspberry Pi installed close to the antenna (in a waterproof box), you can keep coax cables short and won't need an LNA.
 
 ## 2. Download Raspberry Pi Imager
 
@@ -35,7 +33,7 @@ Raspberry Pi describes Raspberry Pi Imager as the quick and easy way to install 
 2. Start **Raspberry Pi Imager**.
 3. Click **Choose Device** and select your Raspberry Pi model.
 4. Click **Choose OS**.
-5. Select **Raspberry Pi OS Lite (64-bit)**.
+5. Select **Raspberry Pi OS Lite (64-bit)**. As it is a headless install and run, we don't need the raspberry pi gui
 6. Click **Choose Storage** and select your microSD card.
 7. Click **Next**.
 
@@ -89,6 +87,8 @@ ssh YOUR_USER@HOSTNAME.local
 
 ## Quick start after cloning
 
+git clone git clone https://github.com/HorvathAndreas/satpi.git
+
 run /scripts/install_base.sh
 
 Run the commands below after cloning the repository:
@@ -98,6 +98,7 @@ cd ~/satpi
 
 cp config/config.example.ini config/config.ini
 nano config/config.ini
+make all necessary changes in the config.ini file.
 
 rclone config
 
@@ -111,4 +112,4 @@ python3 bin/generate_refresh_units.py
 
 systemctl list-timers --all | grep satpi
 
-7. Have fun!
+7. Wait and you should see mails arraving in your mailbox with the link to decoded weather pictures. Have fun!

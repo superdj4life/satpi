@@ -124,10 +124,6 @@ def _parse_scheduling(p):
 
 def _parse_network(p):
     return {
-        "use_vpn": p.getboolean("network", "use_vpn", fallback=False),
-        "vpn_interface": p.get("network", "vpn_interface", fallback="proton"),
-        "vpn_start": p.get("network", "vpn_start_command", fallback=None),
-        "vpn_stop": p.get("network", "vpn_stop_command", fallback=None),
         "tle_url": p.get("network", "tle_url"),
         "tle_file": p.get("network", "tle_file"),
         "tle_timeout": p.getint("network", "tle_timeout_seconds", fallback=30),

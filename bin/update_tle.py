@@ -46,15 +46,6 @@ def run(cmd):
         raise RuntimeError(f"Command failed: {cmd}")
 
 
-def is_interface_up(interface):
-    result = subprocess.run(
-        ["ip", "link", "show", interface],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    return result.returncode == 0
-
-
 def download_tle(url, target):
     run(f"curl --retry 3 --retry-delay 2 --retry-all-errors -fsSL '{url}' -o '{target}'")
     if not os.path.exists(target) or os.path.getsize(target) == 0:
@@ -96,7 +87,6 @@ def filter_tle(input_file, output_file, satellite_names):
     os.replace(tmp_output, output_file)
     logger.info("Matched satellites in TLE: %s", found)
 
-
 def main():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     config_path = os.path.join(base_dir, "config", "config.ini")
@@ -122,20 +112,7 @@ def main():
     fd, tmp_file = tempfile.mkstemp(prefix="satpi_tle_", suffix=".tmp")
     os.close(fd)
 
-    vpn_started = False
-
     try:
-        if network["use_vpn"]:
-            vpn_command = network["vpn_start"]
-            vpn_interface = network["vpn_interface"]
-
-            if is_interface_up(vpn_interface):
-                logger.info("VPN already running")
-            else:
-                logger.info("Starting VPN...")
-                run(vpn_command)
-                vpn_started = True
-
         logger.info("Downloading TLE...")
         try:
             download_tle(tle_url, tmp_file)
@@ -156,7 +133,7 @@ def main():
                     "TLE download failed, but general internet connectivity is working. "
                     "Access to Celestrak appears to be blocked or unavailable. "
                     "Celestrak sometimes blocks IP addresses after too many requests. "
-                    "If this happens, enable VPN in config.ini and try again."
+                    "If this happens, use a system-wide VPN connection and try again."
                 )
 
             raise RuntimeError(
@@ -177,11 +154,6 @@ def main():
     finally:
         if os.path.exists(tmp_file):
             os.remove(tmp_file)
-
-        if vpn_started:
-            logger.info("Stopping VPN...")
-            run(network["vpn_stop"])
-
 
 if __name__ == "__main__":
     main()
