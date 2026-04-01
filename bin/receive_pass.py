@@ -324,8 +324,6 @@ def main():
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
 
-    subject = f"{subject_prefix} {args.satellite} images received, cadu size = {size_mb} MB"
-
     timezone_name = config["station"]["timezone"]
     local_pass_start = format_local_filename_timestamp(args.pass_start, timezone_name)
 
