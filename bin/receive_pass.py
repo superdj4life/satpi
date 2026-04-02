@@ -10,6 +10,7 @@ import os
 import sys
 import subprocess
 from pathlib import Path
+import socket
 import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -74,7 +75,7 @@ def build_satdump_command(config, args, pass_output_dir):
     hardware = config["hardware"]
     satdump = config["satdump"]
 
-    satdump_bin = satdump["binary"]
+    satdump_bin = satdump["binary_path"]
     sample_rate = str(int(hardware["sample_rate"]))
     frequency_hz = str(args.frequency_hz)
     gain_db = str(hardware["gain"])
@@ -127,7 +128,7 @@ def decode_image(config, logger, args, pass_output_dir):
 
     decode_log_path = os.path.join(pass_output_dir, "decode.log")
     decode_cmd = [
-        satdump["binary"],
+        satdump["binary_path"],
         args.pipeline,
         "cadu",
         cadu_file,
@@ -235,6 +236,23 @@ def copy_output(config, logger, pass_output_dir):
     logger.error("Unsupported copy target type: %s", copy_type)
     return False, None, None
 
+def get_host_identity():
+    hostname = socket.gethostname()
+    ip_address = "unknown"
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.connect(("8.8.8.8", 80))
+        ip_address = sock.getsockname()[0]
+        sock.close()
+    except Exception:
+        try:
+            ip_address = socket.gethostbyname(hostname)
+        except Exception:
+            pass
+
+    return hostname, ip_address
+
 
 def send_notification(config, logger, args, pass_output_dir, link):
     notify_cfg = config["notify"]
@@ -260,7 +278,12 @@ def send_notification(config, logger, args, pass_output_dir, link):
     if os.path.exists(cadu_file):
         size_mb = round(os.path.getsize(cadu_file) / (1024 * 1024), 2)
 
-    subject = f"{subject_prefix} {args.satellite} images received, cadu size = {size_mb} MB"
+    hostname, ip_address = get_host_identity()
+
+    subject = (
+        f"{subject_prefix} [{hostname} | {ip_address}] "
+        f"{args.satellite} images received, cadu size = {size_mb} MB"
+    )
 
     if link:
         body = f"Output link:\n{link}\n"
@@ -356,14 +379,14 @@ def main():
     satdump = config["satdump"]
     copytarget = config["copytarget"]
 
-    logger.info("config.hardware.device_index=%s", hardware["device_index"])
+    logger.info("config.hardware.source_id=%s", hardware["source_id"])
     logger.info("config.hardware.gain=%s", hardware["gain"])
     logger.info("config.hardware.sample_rate=%s", hardware["sample_rate"])
     logger.info("config.hardware.bias_t=%s", hardware["bias_t"])
-    logger.info("config.hardware.ppm=%s", hardware["ppm"])
+    logger.info("config.hardware.ppm_correction=%s", hardware["ppm_correction"])
 
     logger.info("config.satdump.enabled=%s", satdump["enabled"])
-    logger.info("config.satdump.binary=%s", satdump["binary"])
+    logger.info("config.satdump.binary_path=%s", satdump["binary_path"])
     logger.info("config.satdump.threads=%s", satdump["threads"])
     logger.info("config.satdump.realtime=%s", satdump["realtime"])
 
@@ -376,8 +399,8 @@ def main():
         logger.info("receive_pass.py finished successfully")
         return 0
 
-    if not os.path.exists(satdump["binary"]):
-        logger.error("SatDump binary not found: %s", satdump["binary"])
+    if not os.path.exists(satdump["binary_path"]):
+        logger.error("SatDump binary not found: %s", satdump["binary_path"])
         return 1
 
     satdump_log_path = os.path.join(pass_output_dir, "satdump.log")
@@ -435,7 +458,7 @@ def main():
         logger.error("SatDump failed")
         return return_code
 
-    decode_ok = decode_image(config, logger, pass_output_dir)
+    decode_ok = decode_image(config, logger, args, pass_output_dir)
     logger.info("decode_ok=%s", decode_ok)
     postprocess_output(config, logger, args, pass_output_dir, decode_ok)
 
