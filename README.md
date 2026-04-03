@@ -56,15 +56,21 @@ satpi/
 ├── config/
 │   ├── config.ini
 │   └── config.example.ini
-├── data/
-│   ├── passes.json
-│   └── state.json
+├── docs/
+│   ├── INSTALL_FOR_BEGINNERS.md
+│   └── images/
 ├── logs/
-├── output/
+├── results/
+│   ├── captures/
+│   └── passes/
+├── scripts/
+│   └── install_base.sh
 ├── systemd/
 │   ├── satpi-refresh.service
 │   ├── satpi-refresh.timer
 │   └── generated/
+├── tle/
+│   └── weather.tle
 └── README.md
 ```
 
@@ -179,22 +185,6 @@ The current implementation supports:
 - `rclone` copy targets
 - optional public/share link generation
 - mail notifications after successful decode and upload
-
-## Git Recommendations
-
-Suggested `.gitignore` entries:
-
-```gitignore
-config/config.ini
-logs/
-output/
-results/passes/passes.json
-data/state.json
-systemd/generated/
-__pycache__/
-*.pyc
-testdata/
-```
 
 ## Status
 

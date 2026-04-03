@@ -3,7 +3,8 @@ logs/
 output/
 tle/*.tle
 results/passes/passes.json
-data/state.json
+results/passes/state.json
+results/captures
 systemd/generated/
 systemd/satpi-refresh.service
 systemd/satpi-refresh.timer
