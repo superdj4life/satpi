@@ -78,7 +78,7 @@ def _parse_hardware(p):
         "gain": p.getfloat("hardware", "gain", fallback=0),
         "sample_rate": float(p.get("hardware", "sample_rate", fallback="2.4e6")),
         "bias_t": p.getboolean("hardware", "bias_t", fallback=False),
-        "ppm": p.getint("hardware", "ppm_correction", fallback=0),
+        "ppm_correction": p.getint("hardware", "ppm_correction", fallback=0),
     }
 
 
@@ -107,7 +107,7 @@ def _parse_satellites(p) -> List[Dict[str, Any]]:
 def _parse_satdump(p):
     return {
         "enabled": p.getboolean("satdump", "enabled", fallback=True),
-        "binary": p.get("satdump", "binary_path"),
+        "binary_path": p.get("satdump", "binary_path"),
         "threads": p.getint("satdump", "threads", fallback=1),
         "realtime": p.getboolean("satdump", "realtime", fallback=True),
     }
@@ -198,6 +198,7 @@ def _validate_config(cfg: Dict[str, Any]):
 
     # SatDump binary check
     if cfg["satdump"]["enabled"]:
-        binary = cfg["satdump"]["binary"]
-        if not os.path.exists(binary):
-            raise ConfigError(f"SatDump binary not found: {binary}")
+        binary_path = cfg["satdump"]["binary_path"]
+        if not os.path.exists(binary_path):
+            raise ConfigError(f"SatDump binary_path not found: {binary_path}")
+
