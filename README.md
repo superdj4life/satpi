@@ -2,47 +2,95 @@
 
 Autonomous, config-driven satellite reception pipeline for Raspberry Pi.
 
-satpi is a headless workflow for automated weather satellite reception on Raspberry Pi systems. It downloads and filters TLE data, predicts passes, generates per-pass systemd timers, runs SatDump for live reception, decodes CADU data, uploads successful results, and sends notifications.
+`satpi` is a headless workflow for automated weather satellite reception. It downloads and filters TLE data, predicts passes, generates per-pass systemd timers, runs SatDump for live reception, decodes CADU data, uploads successful results, and can send notification emails.
 
 ## Features
 
-- autonomous end-to-end workflow
-- config-driven setup
-- headless operation
-- per-satellite configuration
+- Headless, autonomous workflow
+- Config-driven setup
+- Per-satellite configuration
 - Skyfield-based pass prediction
 - systemd-based scheduling
-- SatDump live reception
-- automatic CADU decode
-- optional upload via rclone
-- optional notification via msmtp
+- SatDump live reception and decode
+- Optional upload via `rclone`
+- Optional notification via `msmtp`
+
+## Quick start
+
+Clone the repository:
+
+```bash
+sudo apt update
+sudo apt install -y git
+git clone https://github.com/HorvathAndreas/satpi.git
+cd satpi
+```
+
+Run the base installation script:
+
+```bash
+bash scripts/install_base.sh
+```
+
+Create and edit the active configuration:
+
+```bash
+cp config/config.example.ini config/config.ini
+nano config/config.ini
+```
+
+Run the workflow manually once:
+
+```bash
+python3 bin/update_tle.py
+python3 bin/predict_passes.py
+python3 bin/schedule_passes.py
+python3 bin/generate_refresh_units.py
+```
+
+Check active timers:
+
+```bash
+systemctl list-timers --all | grep satpi
+```
+
+## Requirements
+
+### Hardware
+
+- Raspberry Pi 4 or Raspberry Pi 5
+- RTL-SDR compatible receiver
+- Suitable antenna and RF setup for weather satellite reception
+
+### Software
+
+- Raspberry Pi OS Lite 64-bit
+- Python 3
+- systemd
+- SatDump
+- `python3-skyfield`
+- `python3-numpy`
+- `rclone`
+- `msmtp`
 
 ## Workflow
 
-satpi is split into small, focused components:
+1. **`update_tle.py`**  
+   Downloads fresh TLE data and filters it to the configured satellites.
 
-1. `update_tle.py`  
-   Downloads and filters TLE data for the configured satellites.
+2. **`predict_passes.py`**  
+   Calculates upcoming passes for the configured ground station.
 
-2. `predict_passes.py`  
-   Predicts upcoming passes and writes `passes.json`.
+3. **`schedule_passes.py`**  
+   Generates per-pass systemd service and timer units for all relevant future passes.
 
-3. `schedule_passes.py`  
-   Generates and schedules per-pass systemd timer and service units.
+4. **`receive_pass.py`**  
+   Executes one scheduled pass, starts SatDump, records data, decodes results, uploads output, and optionally sends a notification email.
 
-4. `receive_pass.py`  
-   Executes one scheduled pass:
-   - live reception with SatDump
-   - CADU size check
-   - image decode
-   - upload
-   - link generation
-   - mail notification
+5. **`generate_refresh_units.py`**  
+   Creates the higher-level refresh service and timer that periodically updates the overall planning state of the system.
 
-5. `generate_refresh_units.py`  
-   Generates the static systemd refresh units.
-
-## Project Structure
+## Project structure
 
 ```text
 satpi/
@@ -74,90 +122,130 @@ satpi/
 └── README.md
 ```
 
-## Requirements
-
-- Raspberry Pi running Linux
-- Python 3
-- systemd
-- SatDump
-- Skyfield
-- rclone
-- msmtp
-- RTL-SDR compatible receiver
-
 ## File overview
 
 ### `bin/load_config.py`
-This module is responsible for reading the central `config.ini` file, parsing all required sections, converting values to the correct Python types and validating the resulting configuration. It acts as the common entry point for configuration handling across the whole project. If paths, required options or executable locations are missing or invalid, this module raises a configuration error early so that the other scripts fail fast and with a clearer message. In practice, this file defines the configuration contract for the entire satpi system.
+Loads, parses, and validates the central `config.ini` file. It converts configuration values into typed Python data structures and performs consistency checks before the operational scripts start.
 
 ### `bin/update_tle.py`
-This script downloads current TLE data from the configured remote source, checks whether the download was successful and filters the result so that only the satellites relevant for satpi remain in the local TLE file. It is the first operational step in the planning chain, because accurate pass prediction depends on current orbital data. The script also performs basic connectivity checks in error situations and writes a runtime log so that download and filtering problems can be diagnosed later.
+Downloads current TLE data from the configured source and filters it so that only the satellites used by this installation remain in the local TLE file.
 
 ### `bin/predict_passes.py`
-This script calculates upcoming satellite passes for the configured ground station position based on the filtered local TLE file. It uses the configured latitude, longitude, altitude, minimum elevation and scheduling window to determine which passes are relevant for reception. The result is written as structured pass data that can later be transformed into systemd jobs. In other words, this script converts orbital data into an actionable reception plan.
+Calculates upcoming satellite passes for the configured ground station based on the filtered local TLE file.
 
 ### `bin/schedule_passes.py`
-This script reads the predicted pass data and generates one systemd service and one systemd timer for every future pass that should still be received. It is responsible for translating the abstract pass list into concrete operating system jobs. During that process, outdated generated units are removed, future passes are kept and the corresponding units are linked and enabled. This file therefore forms the bridge between pass prediction and automated execution.
+Reads the predicted pass data and generates one systemd service and one systemd timer for every future pass that should still be received.
 
 ### `bin/receive_pass.py`
-This is the execution script for one scheduled pass. It is called by a generated systemd service and performs the actual operational workflow for a reception window. Depending on the configuration and the pass parameters, it prepares the output directory, starts SatDump with the correct settings, monitors the process until the scheduled stop time, triggers decoding, copies the results to the configured destination and optionally sends a notification email. This is the core runtime component of the project and the place where planning becomes a real recording and decode result.
+Executes one scheduled pass from start to finish. It prepares the pass-specific output directory, starts SatDump, monitors the recording, triggers decoding, copies the results, and optionally sends a notification email.
 
 ### `bin/generate_refresh_units.py`
-This script creates and enables the higher-level refresh service and timer that periodically update the overall planning state of the system. Its job is not to receive a satellite directly, but to make sure that the planning chain keeps running automatically in the background. The refresh workflow typically includes updating TLE data, predicting passes and regenerating all per-pass timers. This script therefore manages the recurring meta-schedule of the whole satpi installation.
+Creates and enables the refresh service and timer that periodically run the higher-level planning chain.
 
 ### `config/config.example.ini`
-This is the public example configuration file that documents the expected structure and available options for a satpi installation. It is intended as a template for new systems and should be copied to `config.ini` before the first real run. The file contains placeholder paths, comments and default values that explain how station settings, paths, hardware, satellites, scheduling, uploads and notifications are configured.
+Public example configuration file for new installations.
 
 ### `config/config.ini`
-This is the active local configuration file used by the satpi scripts on a running system. It contains the real installation-specific values such as file paths, station coordinates, satellite definitions, hardware settings, upload targets and notification settings. Unlike `config.example.ini`, this file is meant to reflect the actual environment of one system and should normally not be committed with private values.
+Active local configuration file used by the satpi scripts on a running system.
 
 ### `scripts/install_base.sh`
-This interactive shell script prepares a Raspberry Pi system for satpi. It installs the required base packages, configures important operating system settings, prepares the directory structure, optionally builds SatDump and guides the user through the initial setup. Its purpose is to reduce the amount of manual system administration needed before satpi can be used. In practice, this script acts as the reproducible base installer for a fresh Raspberry Pi OS system.
+Interactive base installation script for Raspberry Pi OS. It installs the required packages, applies base operating system settings, prepares the directory structure, and builds the required SatDump binary.
 
 ### `systemd/satpi-refresh.service`
-This systemd service defines the command that executes the periodic satpi refresh workflow. It is the service unit behind the recurring planning job and is typically triggered by `satpi-refresh.timer`. Its purpose is to run the update-and-reschedule chain in a controlled way through systemd rather than by manual execution.
+Systemd service that executes the periodic satpi refresh workflow.
 
 ### `systemd/satpi-refresh.timer`
-This timer triggers `satpi-refresh.service` according to the schedule configured for the installation. It ensures that TLE updates, pass prediction and timer regeneration happen regularly without user intervention. This file is essential for keeping the automatic scheduling process alive over time.
+Systemd timer that periodically triggers `satpi-refresh.service`.
 
 ### `systemd/generated/`
-This directory contains the generated per-pass systemd service and timer files created by `schedule_passes.py`. These units are not static project files but dynamically produced runtime artifacts based on the currently predicted future passes. They represent the concrete execution plan for the next receptions known to the system.
+Contains the generated per-pass systemd service and timer files created by `schedule_passes.py`.
 
 ### `tle/weather.tle`
-This file stores the filtered TLE data used locally for pass prediction. It is created or updated by `update_tle.py` and should contain only the satellites relevant for the configured satpi installation. The file acts as the local orbital data source for the prediction step.
+Filtered local TLE file used as the orbital data source for pass prediction.
 
 ### `results/captures/`
-This directory stores pass-specific reception results. Each pass usually gets its own subdirectory containing raw recording output, SatDump logs, decoded imagery and follow-up artifacts such as upload logs. It is the main archive location for actual reception results generated by the system.
+Stores pass-specific reception output such as SatDump logs, raw data, decoded files, upload logs, and related artifacts.
 
 ### `results/passes/`
-This directory stores generated pass data and planning-related output. Depending on the current project structure, this can include predicted pass lists or other intermediate scheduling artifacts used by the automation workflow. Its role is to separate planning data from actual reception captures.
+Stores generated pass prediction and planning-related output.
 
 ### `logs/`
-This directory contains log files written by the satpi scripts. These logs are important for diagnosing failures in configuration, TLE download, prediction, scheduling, reception, decoding, copying or notification delivery. For troubleshooting, this is usually the first place to inspect.
+Stores runtime log files written by the satpi scripts.
 
 ## Configuration
 
-Copy the example configuration and adapt it to your system:
+Create the active configuration file:
 
 ```bash
 cp config/config.example.ini config/config.ini
+nano config/config.ini
 ```
 
-Configure at least:
+At minimum, review and adapt:
 
 - station name and timezone
 - QTH coordinates
-- satellites
-- frequencies and pipelines
 - hardware settings
-- paths
-- copy target
-- notifications
-- systemd user and Python path
+- satellite definitions
+- path settings
+- SatDump path
+- upload target
+- notification settings
+- systemd service user
 
-## systemd Integration
+## Installation notes
 
-Generate the static refresh units:
+The base installation script prepares the operating system and builds SatDump:
+
+```bash
+bash scripts/install_base.sh
+```
+
+After that, two manual integrations are typically still required.
+
+### Configure rclone
+
+```bash
+rclone config
+```
+
+### Configure msmtp
+
+Create the mail configuration file:
+
+```bash
+nano ~/.msmtprc
+chmod 600 ~/.msmtprc
+```
+
+Example structure:
+
+```ini
+defaults
+auth           on
+tls            on
+tls_trust_file /etc/ssl/certs/ca-certificates.crt
+logfile        ~/.msmtp.log
+
+account gmail
+host smtp.gmail.com
+port 587
+from YOUR_GMAIL_ADDRESS
+user YOUR_GMAIL_ADDRESS
+password YOUR_APP_PASSWORD
+
+account default : gmail
+```
+
+Test mail delivery:
+
+```bash
+printf "Subject: satpi test\n\nTest mail.\n" | /usr/bin/msmtp YOUR_GMAIL_ADDRESS
+```
+
+## systemd integration
+
+Generate the refresh units:
 
 ```bash
 python3 bin/generate_refresh_units.py
@@ -168,39 +256,39 @@ This creates and links:
 - `satpi-refresh.service`
 - `satpi-refresh.timer`
 
-The refresh timer runs the full planning chain:
+The refresh timer runs the planning chain:
 
 1. update TLE
 2. predict passes
 3. schedule pass timers
 
-Generated per-pass timers and services are written to:
+Check the result:
 
-```text
-systemd/generated/
+```bash
+systemctl list-timers --all | grep satpi
 ```
 
-## Typical Usage
+## Typical usage
 
-### Update TLE manually
+Update TLE data manually:
 
 ```bash
 python3 bin/update_tle.py
 ```
 
-### Predict passes manually
+Predict passes manually:
 
 ```bash
 python3 bin/predict_passes.py
 ```
 
-### Schedule all future passes manually
+Generate per-pass timers manually:
 
 ```bash
 python3 bin/schedule_passes.py
 ```
 
-### Generate refresh units
+Generate refresh units manually:
 
 ```bash
 python3 bin/generate_refresh_units.py
@@ -208,41 +296,62 @@ python3 bin/generate_refresh_units.py
 
 ## Output
 
-For each successful pass, satpi creates a pass-specific output directory under `output/`.
+### Pass results
 
-Depending on signal quality and decode success, this may include:
+Pass-specific reception results are written to:
 
+```text
+results/captures/
+```
+
+A pass directory may contain:
+
+- SatDump runtime log
 - raw intermediate files
 - `.soft`
 - `.cadu`
 - decoded image products
 - `MSU-MR/`
-- `satdump.log`
 - `decode.log`
 - `upload.log`
-- pass metadata
 
-## Upload and Notifications
+### Planning results
+
+Prediction and planning artifacts are written to:
+
+```text
+results/passes/
+```
+
+### Runtime logs
+
+General script logs are written to:
+
+```text
+logs/
+```
+
+## Upload and notifications
 
 If enabled in `config.ini`, satpi can:
 
 - upload results via `rclone`
 - create a share link
-- send a notification mail via `msmtp`
+- send a notification email via `msmtp`
 
-The current implementation supports:
+## Documentation
 
-- `rclone` copy targets
-- optional public/share link generation
-- mail notifications after successful decode and upload
+Beginner-oriented setup notes are available here:
 
-## Status
-
-satpi is designed as a modular and transparent workflow for autonomous satellite reception. The current implementation covers the full pipeline from TLE update to decoded image delivery.
+```text
+docs/INSTALL_FOR_BEGINNERS.md
+```
 
 ## Author
 
-Andreas Horvath, info[at]andreas-horvath.ch WhatsApp +41 79 249 57 12
+Andreas Horvath  
+info[at]andreas-horvath.ch  
+WhatsApp: +41 79 249 57 12
 
 ## Project
 
