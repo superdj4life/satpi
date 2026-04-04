@@ -110,15 +110,14 @@ satpi/
 ├── logs/
 ├── results/
 │   ├── captures/
-│   └── passes/
+│   ├── passes/
+│   └── tle/
 ├── scripts/
 │   └── install_base.sh
 ├── systemd/
 │   ├── satpi-refresh.service
 │   ├── satpi-refresh.timer
 │   └── generated/
-├── tle/
-│   └── weather.tle
 └── README.md
 ```
 
