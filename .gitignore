@@ -1,10 +1,11 @@
 config/config.ini
 logs/
 output/
-tle/*.tle
-results/passes/passes.json
-results/passes/state.json
-results/captures
+tle/
+results/passes/*
+!results/passes/.gitkeep
+results/captures/*
+!results/captures/.gitkeep
 systemd/generated/
 systemd/satpi-refresh.service
 systemd/satpi-refresh.timer
@@ -12,4 +13,3 @@ __pycache__/
 *.pyc
 testdata/
 *.log
-tle/
