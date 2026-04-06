@@ -80,10 +80,11 @@ def prepare_samples(samples: list[dict]) -> list[dict]:
     prepared.sort(key=lambda x: x["timestamp"])
     return prepared
 
-
 def plot_skyplot(data: dict, samples: list[dict], output_path: str):
-    if len(samples) < 2:
-        raise ValueError("Need at least 2 samples for skyplot")
+    visible_samples = get_visible_samples(samples)
+
+    if len(visible_samples) < 2:
+        raise ValueError("Need at least 2 samples with elevation >= 0 for skyplot")
 
     fig = plt.figure(figsize=(9, 9))
     ax = fig.add_subplot(111, projection="polar")
@@ -95,37 +96,84 @@ def plot_skyplot(data: dict, samples: list[dict], output_path: str):
     # - horizon at outer ring
     ax.set_theta_zero_location("N")
     ax.set_theta_direction(-1)
-    ax.set_rlim(90, 0)
+    ax.set_rlim(0, 90)
+    ax.set_rticks([0, 10, 20, 30, 40, 50, 60, 70, 80, 90])
+    ax.set_yticklabels(["90", "80", "70", "60", "50", "40", "30", "20", "10", "0"])
     ax.set_rlabel_position(225)
 
-    for i in range(len(samples) - 1):
-        s1 = samples[i]
-        s2 = samples[i + 1]
+    for i in range(len(visible_samples) - 1):
+        s1 = visible_samples[i]
+        s2 = visible_samples[i + 1]
 
-        theta = [math.radians(s1["azimuth_deg"]), math.radians(s2["azimuth_deg"])]
-        radius = [90.0 - s1["elevation_deg"], 90.0 - s2["elevation_deg"]]
+        az1 = float(s1["azimuth_deg"])
+        az2 = float(s2["azimuth_deg"])
+        el1 = float(s1["elevation_deg"])
+        el2 = float(s2["elevation_deg"])
+
+        az_diff = abs(az2 - az1)
+        if az_diff > 180:
+            az_diff = 360 - az_diff
+
+        # Break the line if azimuth jumps too much between consecutive points.
+        # This avoids drawing a false line across the sky near zenith / azimuth wrap.
+        if az_diff > 60:
+            continue
+
+        theta = [math.radians(az1), math.radians(az2)]
+        radius = [90.0 - el1, 90.0 - el2]
 
         color = state_color(s1["sync_state"])
         ax.plot(theta, radius, linewidth=2.5, color=color)
 
-    # mark start and end
-    start = samples[0]
-    end = samples[-1]
+    # mark first and last visible points
+    start = visible_samples[0]
+    end = visible_samples[-1]
+
+    start_theta = math.radians(start["azimuth_deg"])
+    start_radius = 90.0 - start["elevation_deg"]
+    end_theta = math.radians(end["azimuth_deg"])
+    end_radius = 90.0 - end["elevation_deg"]
+
     ax.scatter(
-        [math.radians(start["azimuth_deg"])],
-        [90.0 - start["elevation_deg"]],
+        [start_theta],
+        [start_radius],
         marker="o",
-        s=60,
-        color="blue",
+        s=140,
+        facecolor="blue",
+        edgecolor="white",
+        linewidth=1.5,
+        zorder=10,
         label="Start",
     )
     ax.scatter(
-        [math.radians(end["azimuth_deg"])],
-        [90.0 - end["elevation_deg"]],
+        [end_theta],
+        [end_radius],
         marker="x",
-        s=80,
+        s=140,
         color="black",
+        linewidth=2.5,
+        zorder=11,
         label="End",
+    )
+
+    # optional helper labels so the markers are unmistakable
+    ax.annotate(
+        "Start",
+        xy=(start_theta, start_radius),
+        xytext=(8, 8),
+        textcoords="offset points",
+        fontsize=9,
+        color="blue",
+        weight="bold",
+    )
+    ax.annotate(
+        "End",
+        xy=(end_theta, end_radius),
+        xytext=(8, -12),
+        textcoords="offset points",
+        fontsize=9,
+        color="black",
+        weight="bold",
     )
 
     title = f"{data['pass_id']} Skyplot"
@@ -157,7 +205,6 @@ def plot_skyplot(data: dict, samples: list[dict], output_path: str):
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
-
 def merge_segments_by_state(samples: list[dict]) -> list[tuple[datetime, datetime, str]]:
     if not samples:
         return []
@@ -176,6 +223,8 @@ def merge_segments_by_state(samples: list[dict]) -> list[tuple[datetime, datetim
     segments.append((seg_start, samples[-1]["timestamp"], current_state))
     return segments
 
+def get_visible_samples(samples: list[dict]) -> list[dict]:
+    return [s for s in samples if s["elevation_deg"] >= 0.0]
 
 def plot_timeseries(data: dict, samples: list[dict], output_path: str):
     if not samples:
@@ -185,7 +234,8 @@ def plot_timeseries(data: dict, samples: list[dict], output_path: str):
     snr = [s["snr_db"] for s in samples]
     ber = [s["ber"] for s in samples]
 
-    fig, ax1 = plt.subplots(figsize=(12, 6))
+    fig, ax1 = plt.subplots(figsize=(16, 6))
+    fig.subplots_adjust(right=0.72)
 
     # background sync-state bands
     for start, end, state in merge_segments_by_state(samples):
@@ -198,18 +248,18 @@ def plot_timeseries(data: dict, samples: list[dict], output_path: str):
 
     ax2 = ax1.twinx()
     ax2.plot(times, ber, linewidth=1.2, linestyle="--", label="BER")
-    ax2.set_ylabel("BER")
+    ax2.set_ylabel("BER", labelpad=14)
+    ax2.tick_params(axis="y", pad=6)
 
     title = f"{data['pass_id']} Reception Time Series"
     ax1.set_title(title)
 
     metadata_text = build_metadata_text(data)
 
-    ax1.text(
-        1.02,
-        0.98,
+    fig.text(
+        0.75,
+        0.87,
         metadata_text,
-        transform=ax1.transAxes,
         va="top",
         ha="left",
         fontsize=9,
@@ -226,8 +276,7 @@ def plot_timeseries(data: dict, samples: list[dict], output_path: str):
     ax1.legend(handles=handles, loc="upper left")
 
     fig.autofmt_xdate()
-    fig.tight_layout(rect=[0, 0, 0.82, 1])
-    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    fig.savefig(output_path, dpi=150)
     plt.close(fig)
 
 def build_metadata_text(data: dict) -> str:
