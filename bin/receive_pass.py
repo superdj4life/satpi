@@ -8,9 +8,11 @@
 # Author: Andreas Horvath
 # Project: Autonomous, Config-driven satellite reception pipeline for Raspberry Pi
 
+import json
 import argparse
 import logging
 import os
+import re
 import sys
 import subprocess
 from pathlib import Path
@@ -18,6 +20,7 @@ import socket
 import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+from skyfield.api import load, wgs84, EarthSatellite
 import shutil
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -26,6 +29,22 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from load_config import load_config, ConfigError
 
+SNR_LINE_RE = re.compile(
+    r"^\[(?P<time>\d{2}:\d{2}:\d{2}) - (?P<date>\d{2}/\d{2}/\d{4})\].*?"
+    r"SNR : (?P<snr>[0-9.]+)dB, Peak SNR: (?P<peak>[0-9.]+)dB"
+)
+
+SYNC_LINE_RE = re.compile(
+    r"^\[(?P<time>\d{2}:\d{2}:\d{2}) - (?P<date>\d{2}/\d{2}/\d{4})\].*?"
+    r"Viterbi : (?P<viterbi>SYNCED|NOSYNC)\s+BER : (?P<ber>[0-9.]+),\s+Deframer : (?P<deframer>SYNCED|NOSYNC)"
+)
+
+_TS = load.timescale()
+_TLE_CACHE = {
+    "path": None,
+    "mtime": None,
+    "satellites": None,
+}
 
 def parse_args():
     parser = argparse.ArgumentParser(description="SATPI pass receiver")
@@ -338,6 +357,205 @@ def postprocess_output(config, logger, args, pass_id, pass_output_dir, decode_ok
     notify_ok = send_notification(config, logger, args, pass_output_dir, link)
     logger.info("notify_ok=%s", notify_ok)
 
+def satdump_timestamp_to_utc_iso(date_str: str, time_str: str) -> str:
+    dt = datetime.strptime(f"{date_str} {time_str}", "%d/%m/%Y %H:%M:%S")
+    dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def parse_satdump_snr_line(line: str):
+    m = SNR_LINE_RE.search(line)
+    if not m:
+        return None
+
+    return {
+        "timestamp": satdump_timestamp_to_utc_iso(m.group("date"), m.group("time")),
+        "snr_db": float(m.group("snr")),
+        "peak_snr_db": float(m.group("peak")),
+    }
+
+
+def parse_satdump_sync_line(line: str):
+    m = SYNC_LINE_RE.search(line)
+    if not m:
+        return None
+
+    return {
+        "timestamp": satdump_timestamp_to_utc_iso(m.group("date"), m.group("time")),
+        "ber": float(m.group("ber")),
+        "viterbi_state": m.group("viterbi"),
+        "deframer_state": m.group("deframer"),
+    }
+
+
+def build_reception_json_header(config, args, pass_id):
+    hardware = config["hardware"]
+
+    return {
+        "pass_id": pass_id,
+        "satellite": args.satellite,
+        "pipeline": args.pipeline,
+        "frequency_hz": int(args.frequency_hz),
+        "bandwidth_hz": int(args.bandwidth_hz),
+        "gain": float(hardware["gain"]),
+        "source_id": str(hardware["source_id"]),
+        "bias_t": bool(hardware["bias_t"]),
+        "pass_start": args.pass_start,
+        "pass_end": args.pass_end,
+        "scheduled_start": args.scheduled_start,
+        "scheduled_end": args.scheduled_end,
+        "samples": [],
+    }
+
+
+def write_json_atomic(target_path: str, payload: dict):
+    target = Path(target_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = target.with_suffix(target.suffix + ".tmp")
+
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+        f.write("\n")
+
+    os.replace(tmp_path, target)
+
+
+def compute_az_el(config, sample_timestamp_utc: str, satellite_name: str):
+    """
+    Platzhalter.
+    Hier später mit derselben Orbit-/QTH-Logik wie in predict_passes.py
+    Azimut und Elevation für den gegebenen UTC-Zeitpunkt berechnen.
+
+    Muss zurückgeben:
+        (azimuth_deg, elevation_deg)
+    """
+    raise NotImplementedError("compute_az_el() noch nicht implementiert")
+
+
+def maybe_build_sample(config, current_radio_state: dict, sync_data: dict, satellite_name: str):
+    if current_radio_state.get("snr_db") is None:
+        return None
+    if current_radio_state.get("peak_snr_db") is None:
+        return None
+
+    sample_timestamp = sync_data["timestamp"]
+
+    azimuth_deg, elevation_deg = compute_az_el(config, sample_timestamp, satellite_name)
+
+    return {
+        "timestamp": sample_timestamp,
+        "snr_db": current_radio_state["snr_db"],
+        "peak_snr_db": current_radio_state["peak_snr_db"],
+        "ber": sync_data["ber"],
+        "viterbi_state": sync_data["viterbi_state"],
+        "deframer_state": sync_data["deframer_state"],
+        "azimuth_deg": azimuth_deg,
+        "elevation_deg": elevation_deg,
+    }
+
+def _load_satellites_from_tle_file(tle_path: str):
+    mtime = os.path.getmtime(tle_path)
+
+    if (
+        _TLE_CACHE["path"] == tle_path
+        and _TLE_CACHE["mtime"] == mtime
+        and _TLE_CACHE["satellites"] is not None
+    ):
+        return _TLE_CACHE["satellites"]
+
+    with open(tle_path, "r", encoding="utf-8") as f:
+        lines = [line.strip() for line in f if line.strip()]
+
+    satellites = {}
+    i = 0
+    while i + 2 < len(lines):
+        name = lines[i]
+        line1 = lines[i + 1]
+        line2 = lines[i + 2]
+
+        if line1.startswith("1 ") and line2.startswith("2 "):
+            satellites[name] = EarthSatellite(line1, line2, name, _TS)
+            i += 3
+        else:
+            i += 1
+
+    _TLE_CACHE["path"] = tle_path
+    _TLE_CACHE["mtime"] = mtime
+    _TLE_CACHE["satellites"] = satellites
+    return satellites
+
+
+def _resolve_satellite_from_tle(satellites: dict, satellite_name: str):
+    if satellite_name in satellites:
+        return satellites[satellite_name]
+
+    normalized_target = safe_name(satellite_name).upper()
+
+    for name, sat in satellites.items():
+        if safe_name(name).upper() == normalized_target:
+            return sat
+
+    raise ValueError(f"Satellite not found in TLE file: {satellite_name}")
+
+def compute_az_el(config, sample_timestamp_utc: str, satellite_name: str):
+    tle_file = config["network"]["tle_file"]
+
+    satellites = _load_satellites_from_tle_file(tle_file)
+    satellite = _resolve_satellite_from_tle(satellites, satellite_name)
+
+    qth = config["qth"]
+    observer = wgs84.latlon(
+        qth["latitude"],
+        qth["longitude"],
+        elevation_m=qth["altitude"],
+    )
+
+    dt = parse_utc(sample_timestamp_utc)
+    t = _TS.from_datetime(dt)
+
+    difference = satellite - observer
+    topocentric = difference.at(t)
+    alt, az, _distance = topocentric.altaz()
+
+    return float(round(az.degrees, 3)), float(round(alt.degrees, 3))
+
+def render_reception_plots(base_dir, logger, reception_json_path):
+    plot_script = os.path.join(base_dir, "bin", "plot_reception.py")
+
+    if not os.path.exists(plot_script):
+        logger.warning("plot_reception.py not found: %s", plot_script)
+        return False
+
+    if not os.path.exists(reception_json_path):
+        logger.warning("reception JSON not found, skipping plots: %s", reception_json_path)
+        return False
+
+    cmd = [
+        sys.executable,
+        plot_script,
+        reception_json_path,
+    ]
+
+    logger.info("Running plot command: %s", " ".join(cmd))
+
+    result = subprocess.run(
+        cmd,
+        text=True,
+        capture_output=True,
+    )
+
+    logger.info("plot_reception.py exited with return code %s", result.returncode)
+    if result.stdout.strip():
+        logger.info("plot stdout: %s", result.stdout.strip())
+    if result.stderr.strip():
+        logger.info("plot stderr: %s", result.stderr.strip())
+
+    if result.returncode != 0:
+        logger.warning("Plot generation failed")
+        return False
+
+    return True
+
 def main():
     args = parse_args()
 
@@ -412,28 +630,59 @@ def main():
         logger.error("SatDump binary not found: %s", satdump["binary_path"])
         return 1
 
-    satdump_log_path = os.path.join(log_dir, f"{pass_id}-satdump.log")
     cmd, live_pipeline = build_satdump_command(config, args, pass_output_dir)
 
     logger.info("using live pipeline=%s", live_pipeline)
+
+    satdump_log_path = os.path.join(log_dir, f"{pass_id}-satdump.log")
+    reception_json_path = os.path.join(base_dir, "results", "passes", f"{pass_id}-reception.json")
+
     logger.info("satdump_log=%s", satdump_log_path)
+    logger.info("reception_json=%s", reception_json_path)
     logger.info("running SatDump command: %s", " ".join(cmd))
 
-    scheduled_end_dt = parse_utc(args.scheduled_end)
+    reception_payload = build_reception_json_header(config, args, pass_id)
+    write_json_atomic(reception_json_path, reception_payload)
 
+    current_radio_state = {
+        "snr_db": None,
+        "peak_snr_db": None,
+    }
+
+    scheduled_end_dt = parse_utc(args.scheduled_end)
     stopped_by_scheduler = False
 
-    with open(satdump_log_path, "w") as satdump_log:
+    with open(satdump_log_path, "w", encoding="utf-8") as satdump_log:
         process = subprocess.Popen(
             cmd,
-            stdout=satdump_log,
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
             cwd=pass_output_dir,
         )
 
         logger.info("SatDump started with pid=%s", process.pid)
 
         while True:
+            line = process.stdout.readline()
+
+            if line:
+                satdump_log.write(line)
+                satdump_log.flush()
+
+                snr_data = parse_satdump_snr_line(line)
+                if snr_data:
+                    current_radio_state["snr_db"] = snr_data["snr_db"]
+                    current_radio_state["peak_snr_db"] = snr_data["peak_snr_db"]
+
+                sync_data = parse_satdump_sync_line(line)
+                if sync_data:
+                    sample = maybe_build_sample(config, current_radio_state, sync_data, args.satellite)
+                    if sample is not None:
+                        reception_payload["samples"].append(sample)
+                        write_json_atomic(reception_json_path, reception_payload)
+
             return_code = process.poll()
             if return_code is not None:
                 break
@@ -457,6 +706,8 @@ def main():
 
     if stopped_by_scheduler and return_code in (-15, 0):
         logger.info("SatDump was stopped intentionally by scheduler")
+        plots_ok = render_reception_plots(base_dir, logger, reception_json_path)
+        logger.info("plots_ok=%s", plots_ok)
         decode_ok = decode_image(config, logger, args, pass_id, pass_output_dir)
         logger.info("decode_ok=%s", decode_ok)
         postprocess_output(config, logger, args, pass_id, pass_output_dir, decode_ok)
@@ -466,6 +717,9 @@ def main():
     if return_code != 0:
         logger.error("SatDump failed")
         return return_code
+
+    plots_ok = render_reception_plots(base_dir, logger, reception_json_path)
+    logger.info("plots_ok=%s", plots_ok)
 
     decode_ok = decode_image(config, logger, args, pass_id, pass_output_dir)
     logger.info("decode_ok=%s", decode_ok)
