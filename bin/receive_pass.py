@@ -36,7 +36,7 @@ SNR_LINE_RE = re.compile(
 
 SYNC_LINE_RE = re.compile(
     r"^\[(?P<time>\d{2}:\d{2}:\d{2}) - (?P<date>\d{2}/\d{2}/\d{4})\].*?"
-    r"Viterbi : (?P<viterbi>SYNCED|NOSYNC)\s+BER : (?P<ber>[0-9.]+),\s+Deframer : (?P<deframer>SYNCED|NOSYNC)"
+    r"Viterbi : (?P<viterbi>[A-Z0-9_]+)\s+BER : (?P<ber>[0-9.]+),\s+Deframer : (?P<deframer>[A-Z0-9_]+)"
 )
 
 _TS = load.timescale()

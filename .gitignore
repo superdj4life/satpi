@@ -7,8 +7,6 @@ results/passes/*
 !results/passes/.gitkeep
 results/captures/*
 !results/captures/.gitkeep
-results/plots/*
-!results/plots/.gitkeep
 results/optimization/*
 !results/optimization/.gitkeep
 systemd/generated/

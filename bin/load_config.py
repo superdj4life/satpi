@@ -38,6 +38,7 @@ def load_config(path: str) -> Dict[str, Any]:
     config["notify"] = _parse_notify(parser)
     config["debug"] = _parse_debug(parser)
     config["systemd"] = _parse_systemd(parser)
+    config["optimize_reception_ai"] = _parse_optimize_reception_ai(parser)
     _validate_config(config)
 
     return config
@@ -175,6 +176,29 @@ def _parse_systemd(p):
     return {
         "service_user": p.get("systemd", "service_user", fallback=None),
         "python_bin": p.get("systemd", "python_bin", fallback="/usr/bin/python3"),
+    }
+
+def _parse_optimize_reception_ai(p):
+    return {
+        "enabled": p.getboolean("optimize_reception_ai", "enabled", fallback=False),
+        "max_passes": p.getint("optimize_reception_ai", "max_passes", fallback=25),
+        "model": p.get("optimize_reception_ai", "model", fallback="gpt-5"),
+        "output_file": p.get(
+            "optimize_reception_ai",
+            "output_file",
+            fallback="/home/andreas/satpi/results/optimization/optimization-report-ai.txt",
+        ),
+        "include_optimizer_report": p.getboolean(
+            "optimize_reception_ai",
+            "include_optimizer_report",
+            fallback=True,
+        ),
+        "temperature": p.getfloat(
+            "optimize_reception_ai",
+            "temperature",
+            fallback=1.0,
+        ),
+        "api_key": p.get("optimize_reception_ai", "api_key", fallback="").strip(),
     }
 
 # ==============================
