@@ -13,6 +13,7 @@ systemd/generated/
 systemd/satpi-refresh.service
 systemd/satpi-refresh.timer
 __pycache__/
+results/database/
 *.pyc
 testdata/
 *.log
