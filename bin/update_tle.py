@@ -91,6 +91,17 @@ def filter_tle(input_file, output_file, satellite_names):
     os.replace(tmp_output, output_file)
     logger.info("Matched satellites in TLE: %s", found)
 
+def has_usable_tle_file(tle_file: str) -> bool:
+    if not os.path.exists(tle_file):
+        return False
+    if os.path.getsize(tle_file) <= 0:
+        return False
+
+    with open(tle_file, "r", encoding="utf-8") as f:
+        lines = [line.strip() for line in f if line.strip()]
+
+    return len(lines) >= 3
+
 def main():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     config_path = os.path.join(base_dir, "config", "config.ini")
@@ -120,6 +131,13 @@ def main():
         logger.info("Downloading TLE...")
         try:
             download_tle(tle_url, tmp_file)
+
+            sat_names = [s["name"] for s in satellites]
+            logger.info("Filtering satellites: %s", sat_names)
+            filter_tle(tmp_file, tle_file, sat_names)
+
+            logger.info("TLE update successful: %s", tle_file)
+
         except RuntimeError:
             logger.warning("Direct access to Celestrak failed, checking general internet connectivity...")
 
@@ -127,12 +145,26 @@ def main():
             celestrak_ok = check_url("https://celestrak.org", timeout=15)
 
             if not google_ok:
+                if has_usable_tle_file(tle_file):
+                    logger.warning(
+                        "TLE download failed and internet connectivity check also failed. "
+                        "Using existing local TLE file: %s",
+                        tle_file,
+                    )
+                    return
                 raise RuntimeError(
                     "TLE download failed and general internet connectivity check also failed. "
                     "The system appears to have no working internet connection."
                 )
 
             if google_ok and not celestrak_ok:
+                if has_usable_tle_file(tle_file):
+                    logger.warning(
+                        "TLE download failed, but general internet connectivity is working and "
+                        "Celestrak appears unavailable or blocked. Using existing local TLE file: %s",
+                        tle_file,
+                    )
+                    return
                 raise RuntimeError(
                     "TLE download failed, but general internet connectivity is working. "
                     "Access to Celestrak appears to be blocked or unavailable. "
@@ -140,16 +172,18 @@ def main():
                     "If this happens, use a system-wide VPN connection and try again."
                 )
 
+            if has_usable_tle_file(tle_file):
+                logger.warning(
+                    "TLE download failed although general internet connectivity appears to work. "
+                    "Using existing local TLE file: %s",
+                    tle_file,
+                )
+                return
+
             raise RuntimeError(
                 "TLE download failed although general internet connectivity appears to work. "
                 "Please check the configured TLE URL and remote availability."
             )
-
-        sat_names = [s["name"] for s in satellites]
-        logger.info("Filtering satellites: %s", sat_names)
-        filter_tle(tmp_file, tle_file, sat_names)
-
-        logger.info("TLE update successful: %s", tle_file)
 
     except Exception as e:
         logger.exception("update_tle failed: %s", e)
