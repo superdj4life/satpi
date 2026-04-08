@@ -41,6 +41,7 @@ def load_config(path: str) -> Dict[str, Any]:
     config["reception_setup"] = _parse_reception_setup(parser)
     config["optimize_reception"] = _parse_optimize_reception(parser)
     config["optimize_reception_ai"] = _parse_optimize_reception_ai(parser)
+    config["reception_db"] = _parse_reception_db(parser)
     _validate_config(config)
 
     return config
@@ -240,6 +241,26 @@ def _parse_optimize_reception_ai(p):
             fallback=1.0,
         ),
         "api_key": p.get("optimize_reception_ai", "api_key", fallback="").strip(),
+    }
+
+def _parse_reception_db(p):
+    return {
+        "enabled": p.getboolean("reception_db", "enabled", fallback=True),
+        "db_path": p.get(
+            "reception_db",
+            "db_path",
+            fallback="/home/andreas/satpi/results/database/reception.db",
+        ),
+        "import_after_pass": p.getboolean(
+            "reception_db",
+            "import_after_pass",
+            fallback=True,
+        ),
+        "rebuild_on_start": p.getboolean(
+            "reception_db",
+            "rebuild_on_start",
+            fallback=False,
+        ),
     }
 
 # ==============================

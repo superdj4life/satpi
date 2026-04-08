@@ -567,6 +567,57 @@ def render_reception_plots(base_dir, logger, reception_json_path):
 
     return True
 
+def import_reception_to_db(config, logger, reception_json_path: str) -> bool:
+    if not config.get("reception_db", {}).get("enabled", False):
+        logger.info("reception_db disabled in config, skipping DB import")
+        return False
+
+    if not config.get("reception_db", {}).get("import_after_pass", True):
+        logger.info("reception_db import_after_pass=false, skipping DB import")
+        return False
+
+    if not os.path.exists(reception_json_path):
+        logger.warning("reception JSON not found, cannot import to DB: %s", reception_json_path)
+        return False
+
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    importer_path = os.path.join(base_dir, "bin", "import_reception_to_db.py")
+    config_path = os.path.join(base_dir, "config", "config.ini")
+
+    if not os.path.exists(importer_path):
+        logger.warning("DB importer script not found: %s", importer_path)
+        return False
+
+    cmd = [
+        config["systemd"]["python_bin"],
+        importer_path,
+        "--config",
+        config_path,
+        reception_json_path,
+    ]
+
+    logger.info("Importing reception JSON into DB: %s", reception_json_path)
+    logger.info("Running DB import command: %s", " ".join(cmd))
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        cwd=base_dir,
+    )
+
+    if result.stdout:
+        logger.info("DB import stdout: %s", result.stdout.strip())
+    if result.stderr:
+        logger.warning("DB import stderr: %s", result.stderr.strip())
+
+    if result.returncode != 0:
+        logger.error("DB import failed with return code %s", result.returncode)
+        return False
+
+    logger.info("DB import completed successfully")
+    return True
+
 def main():
     args = parse_args()
 
@@ -717,10 +768,16 @@ def main():
 
     if stopped_by_scheduler and return_code in (-15, 0):
         logger.info("SatDump was stopped intentionally by scheduler")
+
+        db_import_ok = import_reception_to_db(config, logger, reception_json_path)
+        logger.info("db_import_ok=%s", db_import_ok)
+
         plots_ok = render_reception_plots(base_dir, logger, reception_json_path)
         logger.info("plots_ok=%s", plots_ok)
+
         decode_ok = decode_image(config, logger, args, pass_id, pass_output_dir)
         logger.info("decode_ok=%s", decode_ok)
+
         postprocess_output(config, logger, args, pass_id, pass_output_dir, decode_ok)
         logger.info("receive_pass.py finished successfully")
         return 0
@@ -729,14 +786,18 @@ def main():
         logger.error("SatDump failed")
         return return_code
 
+    db_import_ok = import_reception_to_db(config, logger, reception_json_path)
+    logger.info("db_import_ok=%s", db_import_ok)
+
     plots_ok = render_reception_plots(base_dir, logger, reception_json_path)
     logger.info("plots_ok=%s", plots_ok)
 
     decode_ok = decode_image(config, logger, args, pass_id, pass_output_dir)
     logger.info("decode_ok=%s", decode_ok)
-    postprocess_output(config, logger, args, pass_id, pass_output_dir, decode_ok)
 
+    postprocess_output(config, logger, args, pass_id, pass_output_dir, decode_ok)
     logger.info("receive_pass.py finished successfully")
+
     return 0
 
 if __name__ == "__main__":
