@@ -1,27 +1,24 @@
 #!/usr/bin/env python3
 # satpi
-# Analyze recorded reception JSON files and recommend better gain settings.
-# Version 1: gain-only optimization.
+# Analyze recorded reception data from SQLite and recommend better reception setup.
+# Current implementation groups by setup_id and reports the best-performing setup group.
 # Author: Andreas Horvath
 # Project: Autonomous, Config-driven satellite reception pipeline for Raspberry Pi
 
 import argparse
 import configparser
 import json
-import math
 import os
+import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass, asdict
-from datetime import datetime
-from pathlib import Path
-from statistics import median
 from typing import Any
 
 from load_config import load_config, ConfigError
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Optimize satpi reception settings from recorded passes")
+    parser = argparse.ArgumentParser(description="Optimize satpi reception settings from recorded passes in SQLite")
     parser.add_argument(
         "--config",
         default=None,
@@ -30,21 +27,9 @@ def parse_args():
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Apply suggested gain to config.ini",
+        help="Apply suggested gain to config.ini if the recommended setup differs only by gain",
     )
     return parser.parse_args()
-
-
-def parse_utc(ts: str) -> datetime:
-    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
-
-
-def derive_sync_state(viterbi_state: str, deframer_state: str) -> str:
-    if deframer_state == "SYNCED":
-        return "SYNCED"
-    if viterbi_state == "SYNCED":
-        return "SYNCING"
-    return "NOSYNC"
 
 
 @dataclass
@@ -54,6 +39,16 @@ class PassMetrics:
     satellite: str
     pipeline: str
     gain: float
+    setup_id: int
+    antenna_type: str
+    antenna_location: str
+    antenna_orientation: str
+    lna: str
+    rf_filter: str
+    feedline: str
+    raspberry_pi: str
+    power_supply: str
+    additional_info: str
     max_elevation_deg: float
     direction: str
     sample_count: int
@@ -66,11 +61,6 @@ class PassMetrics:
     score: float | None = None
 
 
-def load_reception_json(path: str) -> dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
 def get_config_path(cli_value: str | None) -> str:
     if cli_value:
         return os.path.abspath(cli_value)
@@ -78,109 +68,131 @@ def get_config_path(cli_value: str | None) -> str:
     return os.path.join(base_dir, "config", "config.ini")
 
 
-def list_reception_json_files(base_dir: str) -> list[str]:
-    passes_dir = os.path.join(base_dir, "results", "passes")
-    return sorted(str(p) for p in Path(passes_dir).glob("*-reception.json"))
+def load_optimizer_settings(config_path: str) -> dict[str, Any]:
+    p = configparser.ConfigParser()
+    p.read(config_path, encoding="utf-8")
+
+    if not p.has_section("optimize_reception"):
+        raise ConfigError("Missing [optimize_reception] section in config.ini")
+
+    s = p["optimize_reception"]
+    return {
+        "enabled": s.getboolean("enabled", fallback=True),
+        "apply_changes": s.getboolean("apply_changes", fallback=False),
+        "write_suggested_config": s.getboolean("write_suggested_config", fallback=True),
+        "satellite": s.get("satellite"),
+        "pipeline": s.get("pipeline"),
+        "min_max_elevation_deg": s.getfloat("min_max_elevation_deg", fallback=30.0),
+        "max_max_elevation_delta_deg": s.getfloat("max_max_elevation_delta_deg", fallback=10.0),
+        "same_pass_direction_only": s.getboolean("same_pass_direction_only", fallback=True),
+        "evaluation_min_elevation_deg": s.getfloat("evaluation_min_elevation_deg", fallback=10.0),
+        "evaluation_max_elevation_deg": s.getfloat("evaluation_max_elevation_deg", fallback=85.0),
+        "min_passes_per_gain": s.getint("min_passes_per_gain", fallback=2),
+        "min_total_passes": s.getint("min_total_passes", fallback=4),
+        "weight_deframer_synced_seconds": s.getfloat("weight_deframer_synced_seconds", fallback=1.0),
+        "weight_first_deframer_sync_delay": s.getfloat("weight_first_deframer_sync_delay", fallback=-0.4),
+        "weight_sync_drop_count": s.getfloat("weight_sync_drop_count", fallback=-0.5),
+        "weight_median_snr_synced": s.getfloat("weight_median_snr_synced", fallback=0.3),
+        "weight_median_ber_synced": s.getfloat("weight_median_ber_synced", fallback=-0.8),
+        "output_dir": s.get("output_dir"),
+    }
 
 
-def classify_direction(samples: list[dict[str, Any]]) -> str:
-    if len(samples) < 2:
-        return "unknown"
-    first_az = float(samples[0]["azimuth_deg"])
-    last_az = float(samples[-1]["azimuth_deg"])
-    return "increasing_azimuth" if last_az >= first_az else "decreasing_azimuth"
+def open_db(db_path: str) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
-def filter_samples_by_elevation(samples: list[dict[str, Any]], min_el: float, max_el: float) -> list[dict[str, Any]]:
-    return [
-        s for s in samples
-        if min_el <= float(s["elevation_deg"]) <= max_el
-    ]
+def load_metrics_from_db(db_path: str) -> list[PassMetrics]:
+    conn = open_db(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                h.pass_id,
+                h.source_file,
+                h.satellite,
+                h.pipeline,
+                h.gain,
+                h.setup_id,
+                s.antenna_type,
+                s.antenna_location,
+                s.antenna_orientation,
+                s.lna,
+                s.rf_filter,
+                s.feedline,
+                s.raspberry_pi,
+                s.power_supply,
+                s.additional_info,
+                h.max_elevation_deg,
+                h.direction,
+                h.sample_count,
+                h.first_deframer_sync_delay_seconds,
+                h.total_deframer_synced_seconds,
+                h.sync_drop_count,
+                h.median_snr_synced,
+                h.median_ber_synced,
+                h.peak_snr_db
+            FROM pass_header h
+            JOIN setup s ON h.setup_id = s.setup_id
+            ORDER BY h.pass_start
+            """
+        ).fetchall()
+    finally:
+        conn.close()
 
+    metrics_all: list[PassMetrics] = []
+    for row in rows:
+        max_elevation_deg = 0.0
+        if row["max_elevation_deg"] is not None:
+            max_elevation_deg = float(row["max_elevation_deg"])
 
-def compute_pass_metrics(data: dict[str, Any], settings: dict[str, Any]) -> PassMetrics | None:
-    samples = data.get("samples", [])
-    if not samples:
-        return None
+        metrics = PassMetrics(
+            path=str(row["source_file"] or ""),
+            pass_id=str(row["pass_id"]),
+            satellite=str(row["satellite"]),
+            pipeline=str(row["pipeline"]),
+            gain=float(row["gain"]),
+            setup_id=int(row["setup_id"]),
+            antenna_type=str(row["antenna_type"] or ""),
+            antenna_location=str(row["antenna_location"] or ""),
+            antenna_orientation=str(row["antenna_orientation"] or ""),
+            lna=str(row["lna"] or ""),
+            rf_filter=str(row["rf_filter"] or ""),
+            feedline=str(row["feedline"] or ""),
+            raspberry_pi=str(row["raspberry_pi"] or ""),
+            power_supply=str(row["power_supply"] or ""),
+            additional_info=str(row["additional_info"] or ""),
+            max_elevation_deg=max_elevation_deg,
+            direction=str(row["direction"] or "unknown"),
+            sample_count=int(row["sample_count"] or 0),
+            first_deframer_sync_delay_seconds=(
+                float(row["first_deframer_sync_delay_seconds"])
+                if row["first_deframer_sync_delay_seconds"] is not None
+                else None
+            ),
+            total_deframer_synced_seconds=float(row["total_deframer_synced_seconds"] or 0.0),
+            sync_drop_count=int(row["sync_drop_count"] or 0),
+            median_snr_synced=(
+                float(row["median_snr_synced"])
+                if row["median_snr_synced"] is not None
+                else None
+            ),
+            median_ber_synced=(
+                float(row["median_ber_synced"])
+                if row["median_ber_synced"] is not None
+                else None
+            ),
+            peak_snr_db=(
+                float(row["peak_snr_db"])
+                if row["peak_snr_db"] is not None
+                else None
+            ),
+        )
+        metrics_all.append(metrics)
 
-    samples = sorted(samples, key=lambda s: parse_utc(s["timestamp"]))
-    eval_samples = filter_samples_by_elevation(
-        samples,
-        settings["evaluation_min_elevation_deg"],
-        settings["evaluation_max_elevation_deg"],
-    )
-
-    if not eval_samples:
-        return None
-
-    max_elevation_deg = max(float(s["elevation_deg"]) for s in samples)
-    if max_elevation_deg < settings["min_max_elevation_deg"]:
-        return None
-
-    direction = classify_direction(samples)
-
-    first_ts = parse_utc(eval_samples[0]["timestamp"])
-    first_sync_delay = None
-    total_deframer_synced_seconds = 0.0
-    sync_drop_count = 0
-    prev_sync = False
-    prev_ts = None
-
-    snr_synced = []
-    ber_synced = []
-    peak_snr = None
-
-    for s in eval_samples:
-        ts = parse_utc(s["timestamp"])
-        snr = float(s["snr_db"])
-        ber = float(s["ber"])
-        viterbi_state = s.get("viterbi_state", "NOSYNC")
-        deframer_state = s.get("deframer_state", "NOSYNC")
-        state = derive_sync_state(viterbi_state, deframer_state)
-
-        peak_snr = snr if peak_snr is None else max(peak_snr, snr)
-
-        is_synced = (state == "SYNCED")
-
-        if is_synced and first_sync_delay is None:
-            first_sync_delay = (ts - first_ts).total_seconds()
-
-        if is_synced:
-            snr_synced.append(snr)
-            ber_synced.append(ber)
-
-        if prev_ts is not None and prev_sync:
-            dt = (ts - prev_ts).total_seconds()
-            if dt > 0:
-                total_deframer_synced_seconds += dt
-
-        if prev_sync and not is_synced:
-            sync_drop_count += 1
-
-        prev_sync = is_synced
-        prev_ts = ts
-
-    gain = float(data["gain"])
-
-    metrics = PassMetrics(
-        path=data.get("_source_path", ""),
-        pass_id=data["pass_id"],
-        satellite=data["satellite"],
-        pipeline=data["pipeline"],
-        gain=gain,
-        max_elevation_deg=max_elevation_deg,
-        direction=direction,
-        sample_count=len(eval_samples),
-        first_deframer_sync_delay_seconds=first_sync_delay,
-        total_deframer_synced_seconds=total_deframer_synced_seconds,
-        sync_drop_count=sync_drop_count,
-        median_snr_synced=median(snr_synced) if snr_synced else None,
-        median_ber_synced=median(ber_synced) if ber_synced else None,
-        peak_snr_db=peak_snr,
-    )
-
-    metrics.score = compute_score(metrics, settings)
-    return metrics
+    return metrics_all
 
 
 def compute_score(m: PassMetrics, settings: dict[str, Any]) -> float:
@@ -190,11 +202,27 @@ def compute_score(m: PassMetrics, settings: dict[str, Any]) -> float:
 
     score = 0.0
     score += settings["weight_deframer_synced_seconds"] * m.total_deframer_synced_seconds
-    score += settings["weight_first_deframer_sync_delay"] * (first_sync_delay if first_sync_delay is not None else 9999.0)
+    score += settings["weight_first_deframer_sync_delay"] * (
+        first_sync_delay if first_sync_delay is not None else 9999.0
+    )
     score += settings["weight_sync_drop_count"] * m.sync_drop_count
-    score += settings["weight_median_snr_synced"] * (median_snr_synced if median_snr_synced is not None else 0.0)
-    score += settings["weight_median_ber_synced"] * (median_ber_synced if median_ber_synced is not None else 1.0)
+    score += settings["weight_median_snr_synced"] * (
+        median_snr_synced if median_snr_synced is not None else 0.0
+    )
+    score += settings["weight_median_ber_synced"] * (
+        median_ber_synced if median_ber_synced is not None else 1.0
+    )
     return score
+
+
+def score_metrics_list(metrics_list: list[PassMetrics], settings: dict[str, Any]) -> list[PassMetrics]:
+    scored: list[PassMetrics] = []
+    for m in metrics_list:
+        if m.max_elevation_deg < settings["min_max_elevation_deg"]:
+            continue
+        m.score = compute_score(m, settings)
+        scored.append(m)
+    return scored
 
 
 def passes_are_comparable(a: PassMetrics, b: PassMetrics, settings: dict[str, Any]) -> bool:
@@ -234,16 +262,53 @@ def select_comparable_passes(metrics_list: list[PassMetrics], settings: dict[str
     }
     return comparable, stats
 
-def group_by_gain(metrics_list: list[PassMetrics]) -> dict[float, list[PassMetrics]]:
+
+def fmt(value, digits=2, none_value="-"):
+    if value is None:
+        return none_value
+    return f"{value:.{digits}f}"
+
+
+def setup_label(m: PassMetrics) -> str:
+    parts = [
+        f"setup_id={m.setup_id}",
+        f"gain={fmt(m.gain, 1)}",
+    ]
+    if m.antenna_type:
+        parts.append(f"antenna={m.antenna_type}")
+    if m.antenna_location:
+        parts.append(f"location={m.antenna_location}")
+    if m.feedline:
+        parts.append(f"feedline={m.feedline}")
+    if m.raspberry_pi:
+        parts.append(f"pi={m.raspberry_pi}")
+    if m.power_supply:
+        parts.append(f"psu={m.power_supply}")
+    return ", ".join(parts)
+
+
+def group_by_setup(metrics_list: list[PassMetrics]) -> dict[int, list[PassMetrics]]:
     grouped = defaultdict(list)
     for m in metrics_list:
-        grouped[m.gain].append(m)
+        grouped[m.setup_id].append(m)
     return dict(sorted(grouped.items(), key=lambda kv: kv[0]))
 
 
-def summarize_gain_group(gain: float, items: list[PassMetrics]) -> dict[str, Any]:
+def summarize_setup_group(setup_id: int, items: list[PassMetrics]) -> dict[str, Any]:
+    ref = items[0]
     return {
-        "gain": gain,
+        "setup_id": setup_id,
+        "setup_label": setup_label(ref),
+        "gain": ref.gain,
+        "antenna_type": ref.antenna_type,
+        "antenna_location": ref.antenna_location,
+        "antenna_orientation": ref.antenna_orientation,
+        "lna": ref.lna,
+        "rf_filter": ref.rf_filter,
+        "feedline": ref.feedline,
+        "raspberry_pi": ref.raspberry_pi,
+        "power_supply": ref.power_supply,
+        "additional_info": ref.additional_info,
         "pass_count": len(items),
         "avg_score": sum(m.score for m in items if m.score is not None) / len(items),
         "avg_total_deframer_synced_seconds": sum(m.total_deframer_synced_seconds for m in items) / len(items),
@@ -253,36 +318,73 @@ def summarize_gain_group(gain: float, items: list[PassMetrics]) -> dict[str, Any
         ) / len(items),
         "avg_sync_drop_count": sum(m.sync_drop_count for m in items) / len(items),
         "avg_median_snr_synced": sum((m.median_snr_synced or 0.0) for m in items) / len(items),
-        "avg_median_ber_synced": sum((m.median_ber_synced if m.median_ber_synced is not None else 1.0) for m in items) / len(items),
+        "avg_median_ber_synced": sum(
+            (m.median_ber_synced if m.median_ber_synced is not None else 1.0) for m in items
+        ) / len(items),
     }
 
 
-def choose_recommended_gain(grouped: dict[float, list[PassMetrics]], settings: dict[str, Any]) -> tuple[float | None, list[dict[str, Any]]]:
+def choose_recommended_setup(
+    grouped: dict[int, list[PassMetrics]],
+    settings: dict[str, Any],
+) -> tuple[int | None, list[dict[str, Any]]]:
     summaries = []
-    for gain, items in grouped.items():
+    for setup_id, items in grouped.items():
         if len(items) < settings["min_passes_per_gain"]:
             continue
-        summaries.append(summarize_gain_group(gain, items))
+        summaries.append(summarize_setup_group(setup_id, items))
 
     if not summaries:
         return None, summaries
 
     summaries.sort(key=lambda x: x["avg_score"], reverse=True)
-    return summaries[0]["gain"], summaries
+    return summaries[0]["setup_id"], summaries
 
 
 def detect_current_gain(config: dict[str, Any]) -> float:
     return float(config["hardware"]["gain"])
 
-def fmt(value, digits=2, none_value="-"):
-    if value is None:
-        return none_value
-    return f"{value:.{digits}f}"
+
+def current_setup_from_config(config: dict[str, Any]) -> dict[str, Any]:
+    s = config["reception_setup"]
+    return {
+        "gain": float(config["hardware"]["gain"]),
+        "antenna_type": str(s.get("antenna_type", "")),
+        "antenna_location": str(s.get("antenna_location", "")),
+        "antenna_orientation": str(s.get("antenna_orientation", "")),
+        "lna": str(s.get("lna", "")),
+        "rf_filter": str(s.get("rf_filter", "")),
+        "feedline": str(s.get("feedline", "")),
+        "raspberry_pi": str(s.get("raspberry_pi", "")),
+        "power_supply": str(s.get("power_supply", "")),
+        "additional_info": str(s.get("additional_info", "")),
+    }
+
+
+def summary_matches_current_setup(summary: dict[str, Any], current_setup: dict[str, Any]) -> bool:
+    keys = [
+        "gain",
+        "antenna_type",
+        "antenna_location",
+        "antenna_orientation",
+        "lna",
+        "rf_filter",
+        "feedline",
+        "raspberry_pi",
+        "power_supply",
+        "additional_info",
+    ]
+    for key in keys:
+        if summary.get(key) != current_setup.get(key):
+            return False
+    return True
+
 
 def write_report_txt(
     output_path: str,
     current_gain: float,
-    recommended_gain: float | None,
+    current_setup: dict[str, Any],
+    recommended_setup_id: int | None,
     comparable_metrics: list[PassMetrics],
     summaries: list[dict[str, Any]],
 ):
@@ -291,20 +393,21 @@ def write_report_txt(
     lines.append("==============================")
     lines.append("")
     lines.append(f"Current gain: {fmt(current_gain, 1)}")
-    lines.append(f"Recommended gain: {fmt(recommended_gain, 1) if recommended_gain is not None else 'no recommendation'}")
     lines.append(f"Comparable passes analyzed: {len(comparable_metrics)}")
     lines.append("")
 
     best = summaries[0] if summaries else None
     current_summary = None
     for s in summaries:
-        if abs(s["gain"] - current_gain) < 1e-9:
+        if summary_matches_current_setup(s, current_setup):
             current_summary = s
             break
 
     if best:
-        lines.append("Best gain group")
-        lines.append("---------------")
+        lines.append("Best setup group")
+        lines.append("----------------")
+        lines.append(f"Setup ID: {best['setup_id']}")
+        lines.append(f"Setup: {best['setup_label']}")
         lines.append(f"Gain: {fmt(best['gain'], 1)}")
         lines.append(f"Pass count: {best['pass_count']}")
         lines.append(f"Average score: {fmt(best['avg_score'], 2)}")
@@ -315,14 +418,16 @@ def write_report_txt(
         lines.append(f"Average median BER: {fmt(best['avg_median_ber_synced'], 4)}")
         lines.append("")
 
-    lines.append("Gain group summary")
-    lines.append("------------------")
+    lines.append("Setup group summary")
+    lines.append("-------------------")
     for s in summaries:
         marker = "  "
-        if recommended_gain is not None and abs(s["gain"] - recommended_gain) < 1e-9:
+        if recommended_setup_id is not None and s["setup_id"] == recommended_setup_id:
             marker = "* "
         lines.append(
-            f"{marker}gain={fmt(s['gain'], 1)}: "
+            f"{marker}setup_id={s['setup_id']}, "
+            f"gain={fmt(s['gain'], 1)}, "
+            f"setup='{s['setup_label']}', "
             f"passes={s['pass_count']}, "
             f"avg_score={fmt(s['avg_score'], 2)}, "
             f"avg_synced_seconds={fmt(s['avg_total_deframer_synced_seconds'], 1)}, "
@@ -334,22 +439,19 @@ def write_report_txt(
 
     lines.append("")
 
-    if recommended_gain is not None and best is not None:
+    if recommended_setup_id is not None and best is not None:
         lines.append("Recommendation rationale")
         lines.append("------------------------")
 
         if current_summary is None:
             lines.append(
-                f"Recommended gain {fmt(recommended_gain, 1)} has the best score among the comparable pass groups."
+                f"Recommended setup_id {recommended_setup_id} has the best score among the comparable setup groups."
             )
-        elif abs(recommended_gain - current_gain) < 1e-9:
-            lines.append(
-                f"No gain change is recommended. The current gain {fmt(current_gain, 1)} already performs best."
-            )
+        elif best["setup_id"] == current_summary["setup_id"]:
+            lines.append("No setup change is recommended. The current setup already performs best.")
         else:
-            lines.append(
-                f"Change gain from {fmt(current_gain, 1)} to {fmt(recommended_gain, 1)}."
-            )
+            lines.append(f"Recommended setup ID: {recommended_setup_id}")
+            lines.append(f"Recommended setup: {best['setup_label']}")
             lines.append(
                 f"The recommended group shows longer sync time "
                 f"({fmt(best['avg_total_deframer_synced_seconds'], 1)} s vs {fmt(current_summary['avg_total_deframer_synced_seconds'], 1)} s), "
@@ -368,6 +470,7 @@ def write_report_txt(
     for m in comparable_metrics:
         lines.append(
             f"- {m.pass_id}: "
+            f"setup_id={m.setup_id}, "
             f"gain={fmt(m.gain, 1)}, "
             f"max_el={fmt(m.max_elevation_deg, 1)}, "
             f"score={fmt(m.score, 2)}, "
@@ -375,18 +478,28 @@ def write_report_txt(
             f"first_sync_delay={fmt(m.first_deframer_sync_delay_seconds, 1)}, "
             f"sync_drops={m.sync_drop_count}, "
             f"median_snr={fmt(m.median_snr_synced, 2)}, "
-            f"median_ber={fmt(m.median_ber_synced, 4)}"
+            f"median_ber={fmt(m.median_ber_synced, 4)}, "
+            f"setup='{setup_label(m)}'"
         )
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
-def write_report_json(output_path: str, current_gain: float, recommended_gain: float | None, comparable_metrics: list[PassMetrics], summaries: list[dict[str, Any]]):
+
+def write_report_json(
+    output_path: str,
+    current_gain: float,
+    current_setup: dict[str, Any],
+    recommended_setup_id: int | None,
+    comparable_metrics: list[PassMetrics],
+    summaries: list[dict[str, Any]],
+):
     payload = {
         "current_gain": current_gain,
-        "recommended_gain": recommended_gain,
+        "current_setup": current_setup,
+        "recommended_setup_id": recommended_setup_id,
         "comparable_pass_count": len(comparable_metrics),
-        "gain_summaries": summaries,
+        "setup_summaries": summaries,
         "passes": [asdict(m) for m in comparable_metrics],
     }
     with open(output_path, "w", encoding="utf-8") as f:
@@ -419,11 +532,13 @@ def apply_gain_to_config(config_path: str, recommended_gain: float):
     with open(config_path, "w", encoding="utf-8") as f:
         p.write(f)
 
+
 def backup_config(config_path: str) -> str:
     backup_path = config_path + ".bak"
     with open(config_path, "r", encoding="utf-8") as src, open(backup_path, "w", encoding="utf-8") as dst:
         dst.write(src.read())
     return backup_path
+
 
 def main():
     args = parse_args()
@@ -431,9 +546,7 @@ def main():
 
     try:
         config = load_config(config_path)
-        if "optimize_reception" not in config:
-            raise ConfigError("Missing optimize_reception config block")
-        settings = config["optimize_reception"]
+        settings = load_optimizer_settings(config_path)
     except ConfigError as e:
         print(f"[optimize_reception] CONFIG ERROR: {e}")
         return 1
@@ -442,20 +555,21 @@ def main():
         print("[optimize_reception] disabled in config")
         return 0
 
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    input_files = list_reception_json_files(base_dir)
-
-    if not input_files:
-        print("[optimize_reception] no reception JSON files found")
+    if not config["reception_db"]["enabled"]:
+        print("[optimize_reception] reception_db disabled in config")
         return 1
 
-    metrics_all = []
-    for path in input_files:
-        data = load_reception_json(path)
-        data["_source_path"] = path
-        metrics = compute_pass_metrics(data, settings)
-        if metrics is not None:
-            metrics_all.append(metrics)
+    db_path = config["reception_db"]["db_path"]
+    if not os.path.exists(db_path):
+        print(f"[optimize_reception] database not found: {db_path}")
+        return 1
+
+    metrics_all = load_metrics_from_db(db_path)
+    metrics_all = score_metrics_list(metrics_all, settings)
+
+    if not metrics_all:
+        print("[optimize_reception] no usable pass metrics found in database")
+        return 1
 
     comparable_metrics, selection_stats = select_comparable_passes(metrics_all, settings)
 
@@ -471,9 +585,10 @@ def main():
         )
         return 1
 
-    grouped = group_by_gain(comparable_metrics)
+    grouped = group_by_setup(comparable_metrics)
     current_gain = detect_current_gain(config)
-    recommended_gain, summaries = choose_recommended_gain(grouped, settings)
+    current_setup = current_setup_from_config(config)
+    recommended_setup_id, summaries = choose_recommended_setup(grouped, settings)
 
     output_dir = settings["output_dir"]
     os.makedirs(output_dir, exist_ok=True)
@@ -481,30 +596,61 @@ def main():
     txt_report = os.path.join(output_dir, "optimization-report.txt")
     json_report = os.path.join(output_dir, "optimization-report.json")
 
-    write_report_txt(txt_report, current_gain, recommended_gain, comparable_metrics, summaries)
-    write_report_json(json_report, current_gain, recommended_gain, comparable_metrics, summaries)
+    write_report_txt(
+        txt_report,
+        current_gain,
+        current_setup,
+        recommended_setup_id,
+        comparable_metrics,
+        summaries,
+    )
+    write_report_json(
+        json_report,
+        current_gain,
+        current_setup,
+        recommended_setup_id,
+        comparable_metrics,
+        summaries,
+    )
 
     print(f"[optimize_reception] wrote: {txt_report}")
     print(f"[optimize_reception] wrote: {json_report}")
 
-    if recommended_gain is not None and settings["write_suggested_config"]:
-        suggested_config = os.path.join(output_dir, "config.suggested.ini")
-        write_suggested_config(config_path, suggested_config, recommended_gain)
-        print(f"[optimize_reception] wrote: {suggested_config}")
-
+    best_summary = summaries[0] if summaries else None
     should_apply = args.apply or settings["apply_changes"]
 
-    if should_apply and recommended_gain is not None:
-        backup_path = backup_config(config_path)
-        print(f"[optimize_reception] backup written: {backup_path}")
-        apply_gain_to_config(config_path, recommended_gain)
-        print(f"[optimize_reception] applied new gain to config.ini: {recommended_gain}")
+    # conservative apply logic:
+    # only apply automatically if the recommended setup differs from the current one by gain only
+    if should_apply and best_summary is not None:
+        same_non_gain = (
+            best_summary["antenna_type"] == current_setup["antenna_type"]
+            and best_summary["antenna_location"] == current_setup["antenna_location"]
+            and best_summary["antenna_orientation"] == current_setup["antenna_orientation"]
+            and best_summary["lna"] == current_setup["lna"]
+            and best_summary["rf_filter"] == current_setup["rf_filter"]
+            and best_summary["feedline"] == current_setup["feedline"]
+            and best_summary["raspberry_pi"] == current_setup["raspberry_pi"]
+            and best_summary["power_supply"] == current_setup["power_supply"]
+            and best_summary["additional_info"] == current_setup["additional_info"]
+        )
 
-    if recommended_gain is None:
-        print("[optimize_reception] no gain recommendation possible")
+        if same_non_gain and best_summary["gain"] != current_gain:
+            backup_path = backup_config(config_path)
+            print(f"[optimize_reception] backup written: {backup_path}")
+            apply_gain_to_config(config_path, float(best_summary["gain"]))
+            print(f"[optimize_reception] applied new gain to config.ini: {best_summary['gain']}")
+        elif same_non_gain:
+            print("[optimize_reception] current setup already matches recommended setup")
+        else:
+            print("[optimize_reception] recommended setup differs in more than gain; no automatic config change applied")
+
+    if recommended_setup_id is None:
+        print("[optimize_reception] no setup recommendation possible")
     else:
         print(f"[optimize_reception] current gain: {current_gain}")
-        print(f"[optimize_reception] recommended gain: {recommended_gain}")
+        print(f"[optimize_reception] recommended setup_id: {recommended_setup_id}")
+        if best_summary is not None:
+            print(f"[optimize_reception] recommended setup: {best_summary['setup_label']}")
 
     return 0
 
