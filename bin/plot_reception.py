@@ -20,7 +20,7 @@ import matplotlib.dates as mdates
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Render reception plots from satpi reception JSON")
-    parser.add_argument("input_json", help="Path to <pass_id>-reception.json")
+    parser.add_argument("input_json", help="Path to reception.json")
     parser.add_argument(
         "--output-dir",
         default=None,
@@ -326,9 +326,7 @@ def main():
     if args.output_dir:
         output_dir = os.path.abspath(args.output_dir)
     else:
-        base_dir = os.path.dirname(os.path.dirname(input_json))
-        pass_id = data["pass_id"]
-        output_dir = os.path.join(base_dir, "captures", pass_id)
+       output_dir = os.path.dirname(input_json)
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -337,7 +335,7 @@ def main():
     timeseries_path = os.path.join(output_dir, f"{pass_id}-timeseries.png")
 
     plot_skyplot(data, samples, skyplot_path)
-    plot_timeseries(data, samples, timeseries_path)
+    moplot_timeseries(data, samples, timeseries_path)
 
     print(f"Created: {skyplot_path}")
     print(f"Created: {timeseries_path}")
