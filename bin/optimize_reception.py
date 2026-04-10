@@ -48,11 +48,10 @@ class PassMetrics:
     raspberry_pi: str
     power_supply: str
     additional_info: str
-    max_elevation_deg: float
-    aos_azimuth: float | None
-    los_azimuth: float | None
-    culmination_azimuth: float | None
-    culmination_elevation: float | None
+    aos_azimuth_deg: float | None
+    culmination_azimuth_deg: float | None
+    los_azimuth_deg: float | None
+    culmination_elevation_deg: float | None
     direction: str
     sample_count: int
     first_deframer_sync_delay_seconds: float | None
@@ -122,11 +121,10 @@ def load_metrics_from_db(db_path: str) -> list[PassMetrics]:
                 s.raspberry_pi,
                 s.power_supply,
                 s.additional_info,
-                h.max_elevation_deg,
-                h.aos_azimuth,
-                h.los_azimuth,
-                h.culmination_azimuth,
-                h.culmination_elevation,
+                h.aos_azimuth_deg,
+                h.culmination_azimuth_deg,
+                h.los_azimuth_deg,
+                h.culmination_elevation_deg,
                 h.direction,
                 h.sample_count,
                 h.first_deframer_sync_delay_seconds,
@@ -145,10 +143,6 @@ def load_metrics_from_db(db_path: str) -> list[PassMetrics]:
 
     metrics_all: list[PassMetrics] = []
     for row in rows:
-        max_elevation_deg = 0.0
-        if row["max_elevation_deg"] is not None:
-            max_elevation_deg = float(row["max_elevation_deg"])
-
         metrics = PassMetrics(
             path=str(row["source_file"] or ""),
             pass_id=str(row["pass_id"]),
@@ -165,25 +159,24 @@ def load_metrics_from_db(db_path: str) -> list[PassMetrics]:
             raspberry_pi=str(row["raspberry_pi"] or ""),
             power_supply=str(row["power_supply"] or ""),
             additional_info=str(row["additional_info"] or ""),
-            max_elevation_deg=max_elevation_deg,
-            aos_azimuth=(
-                float(row["aos_azimuth"])
-                if row["aos_azimuth"] is not None
+            aos_azimuth_deg=(
+                float(row["aos_azimuth_deg"])
+                if row["aos_azimuth_deg"] is not None
                 else None
             ),
-            los_azimuth=(
-                float(row["los_azimuth"])
-                if row["los_azimuth"] is not None
+            culmination_azimuth_deg=(
+                float(row["culmination_azimuth_deg"])
+                if row["culmination_azimuth_deg"] is not None
                 else None
             ),
-            culmination_azimuth=(
-                float(row["culmination_azimuth"])
-                if row["culmination_azimuth"] is not None
+            los_azimuth_deg=(
+                float(row["los_azimuth_deg"])
+                if row["los_azimuth_deg"] is not None
                 else None
             ),
-            culmination_elevation=(
-                float(row["culmination_elevation"])
-                if row["culmination_elevation"] is not None
+            culmination_elevation_deg=(
+                float(row["culmination_elevation_deg"])
+                if row["culmination_elevation_deg"] is not None
                 else None
             ),
             direction=str(row["direction"] or "unknown"),
@@ -211,7 +204,6 @@ def load_metrics_from_db(db_path: str) -> list[PassMetrics]:
                 else None
             ),
         )
-
         metrics_all.append(metrics)
 
     return metrics_all
@@ -252,30 +244,38 @@ def angular_delta_deg(a: float | None, b: float | None) -> float | None:
         delta = 360.0 - delta
     return delta
 
-
 def passes_are_comparable(a: PassMetrics, b: PassMetrics, settings: dict[str, Any]) -> bool:
+    if a.satellite != b.satellite:
+        return False
+
+    if a.pipeline != b.pipeline:
+        return False
+
     if settings["same_pass_direction_only"] and a.direction != b.direction:
         return False
 
-    aos_delta = angular_delta_deg(a.aos_azimuth, b.aos_azimuth)
+    aos_delta = angular_delta_deg(a.aos_azimuth_deg, b.aos_azimuth_deg)
     if aos_delta is None or aos_delta > settings["max_delta_aos_azimuth"]:
         return False
 
-    los_delta = angular_delta_deg(a.los_azimuth, b.los_azimuth)
+    los_delta = angular_delta_deg(a.los_azimuth_deg, b.los_azimuth_deg)
     if los_delta is None or los_delta > settings["max_delta_los_azimuth"]:
         return False
 
-    culmination_azimuth_delta = angular_delta_deg(a.culmination_azimuth, b.culmination_azimuth)
+    culmination_azimuth_delta = angular_delta_deg(
+        a.culmination_azimuth_deg,
+        b.culmination_azimuth_deg,
+    )
     if (
         culmination_azimuth_delta is None
         or culmination_azimuth_delta > settings["max_delta_culmination_azimuth"]
     ):
         return False
 
-    if a.culmination_elevation is None or b.culmination_elevation is None:
+    if a.culmination_elevation_deg is None or b.culmination_elevation_deg is None:
         return False
 
-    if abs(a.culmination_elevation - b.culmination_elevation) > settings["max_delta_culmination_elevation"]:
+    if abs(a.culmination_elevation_deg - b.culmination_elevation_deg) > settings["max_delta_culmination_elevation"]:
         return False
 
     return True
@@ -283,10 +283,10 @@ def passes_are_comparable(a: PassMetrics, b: PassMetrics, settings: dict[str, An
 def select_comparable_passes(metrics_list: list[PassMetrics], settings: dict[str, Any]):
     candidates = [
         m for m in metrics_list
-        if m.culmination_elevation is not None
-        and m.aos_azimuth is not None
-        and m.los_azimuth is not None
-        and m.culmination_azimuth is not None
+        if m.aos_azimuth_deg is not None
+        and m.los_azimuth_deg is not None
+        and m.culmination_azimuth_deg is not None
+        and m.culmination_elevation_deg is not None
     ]
 
     if not candidates:
@@ -297,7 +297,7 @@ def select_comparable_passes(metrics_list: list[PassMetrics], settings: dict[str
             "reference_pass_id": None,
         }
 
-    reference = max(candidates, key=lambda m: m.culmination_elevation)
+    reference = max(candidates, key=lambda m: m.culmination_elevation_deg)
     comparable = [m for m in candidates if passes_are_comparable(reference, m, settings)]
 
     stats = {
@@ -514,7 +514,7 @@ def write_report_txt(
             f"- {m.pass_id}: "
             f"setup_id={m.setup_id}, "
             f"gain={fmt(m.gain, 1)}, "
-            f"max_el={fmt(m.max_elevation_deg, 1)}, "
+            f"culmination_el={fmt(m.culmination_elevation_deg, 1)}, "
             f"score={fmt(m.score, 2)}, "
             f"synced_seconds={fmt(m.total_deframer_synced_seconds, 1)}, "
             f"first_sync_delay={fmt(m.first_deframer_sync_delay_seconds, 1)}, "
