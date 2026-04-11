@@ -35,6 +35,7 @@ def setup_logging(log_dir):
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
+
 def check_url(url: str, timeout: int = 15) -> bool:
     cmd = f"curl -I --max-time {timeout} --connect-timeout {timeout} -fsSL '{url}' >/dev/null"
     try:
@@ -65,10 +66,10 @@ def filter_tle(input_file, output_file, satellite_names):
     normalized_targets = {normalize_sat_name(s) for s in satellite_names}
     found = []
 
-    with open(input_file, "r") as f:
+    with open(input_file, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
-    with open(tmp_output, "w") as out:
+    with open(tmp_output, "w", encoding="utf-8") as out:
         i = 0
         while i < len(lines):
             line = lines[i].strip()
@@ -91,6 +92,7 @@ def filter_tle(input_file, output_file, satellite_names):
     os.replace(tmp_output, output_file)
     logger.info("Matched satellites in TLE: %s", found)
 
+
 def has_usable_tle_file(tle_file: str) -> bool:
     if not os.path.exists(tle_file):
         return False
@@ -101,6 +103,7 @@ def has_usable_tle_file(tle_file: str) -> bool:
         lines = [line.strip() for line in f if line.strip()]
 
     return len(lines) >= 3
+
 
 def main():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -115,10 +118,11 @@ def main():
     setup_logging(config["paths"]["log_dir"])
 
     network = config["network"]
+    paths = config["paths"]
     satellites = [s for s in config["satellites"] if s["enabled"]]
 
     tle_url = network["tle_url"]
-    tle_file = network["tle_file"]
+    tle_file = paths["tle_file"]
 
     tle_dir = os.path.dirname(tle_file)
     if tle_dir:
@@ -192,6 +196,7 @@ def main():
     finally:
         if os.path.exists(tmp_file):
             os.remove(tmp_file)
+
 
 if __name__ == "__main__":
     main()

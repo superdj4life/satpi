@@ -53,7 +53,7 @@ def run(cmd):
 
 def write_file(path, content):
     tmp_path = path + ".tmp"
-    with open(tmp_path, "w") as f:
+    with open(tmp_path, "w", encoding="utf-8") as f:
         f.write(content)
     os.replace(tmp_path, path)
 
@@ -131,7 +131,7 @@ def main():
     timer_path = os.path.join(systemd_dir, "satpi-refresh.timer")
 
     service_user = config["systemd"]["service_user"]
-    python_bin = config["systemd"]["python_bin"]
+    python_bin = config["paths"]["python_bin"]
 
     frequency = config["scheduling"]["frequency"].strip().upper()
     update_time = config["scheduling"]["time"].strip()

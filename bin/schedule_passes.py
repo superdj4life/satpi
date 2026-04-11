@@ -80,7 +80,7 @@ def load_passes(pass_file):
     if not os.path.exists(pass_file):
         raise FileNotFoundError(f"Pass file not found: {pass_file}")
 
-    with open(pass_file, "r") as f:
+    with open(pass_file, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     return data.get("passes", [])
@@ -110,6 +110,7 @@ def make_unit_base_name(pass_entry):
     start = pass_entry["scheduled_start_dt"].strftime("%Y%m%dT%H%M%SZ")
     return f"satpi-pass-{start}-{sat}"
 
+
 def make_service_content(pass_entry, receiver_script, python_bin, base_dir, service_user):
     user_line = f"User={service_user}\n" if service_user else ""
 
@@ -127,6 +128,7 @@ Type=oneshot
 ExecStart={python_bin} {receiver_script} '{pass_entry["satellite"]}' '{pass_entry["frequency_hz"]}' '{pass_entry["bandwidth_hz"]}' '{pass_entry["pipeline"]}' '{pass_entry["start"]}' '{pass_entry["end"]}' '{scheduled_start}' '{scheduled_end}'
 """
 
+
 def make_timer_content(service_name, pass_entry):
     return f"""[Unit]
 Description=SATPI timer for {pass_entry['satellite']} at {isoformat_utc(pass_entry['scheduled_start_dt'])}
@@ -140,11 +142,13 @@ Unit={service_name}
 WantedBy=timers.target
 """
 
+
 def write_file(path, content):
     tmp_path = path + ".tmp"
-    with open(tmp_path, "w") as f:
+    with open(tmp_path, "w", encoding="utf-8") as f:
         f.write(content)
     os.replace(tmp_path, path)
+
 
 def cleanup_existing_units(generated_units_dir):
     existing_services = sorted(glob.glob(os.path.join(generated_units_dir, "satpi-pass-*.service")))
@@ -161,6 +165,7 @@ def cleanup_existing_units(generated_units_dir):
     for path in existing_services + existing_timers:
         logger.info("Removing old generated unit file: %s", path)
         os.remove(path)
+
 
 def create_units(generated_units_dir, receiver_script, future_passes, python_bin, base_dir, service_user):
     created = []
@@ -182,6 +187,7 @@ def create_units(generated_units_dir, receiver_script, future_passes, python_bin
         created.append((service_name, timer_name, service_path, timer_path))
 
     return created
+
 
 def link_and_enable_units(created_units):
     for service_name, timer_name, service_path, timer_path in created_units:
@@ -206,10 +212,11 @@ def main():
 
     setup_logging(config["paths"]["log_dir"])
 
-    pass_file = config["paths"]["pass_file"]
-    generated_units_dir = config["paths"]["generated_units_dir"]
+    paths = config["paths"]
+    pass_file = paths["pass_file"]
+    generated_units_dir = paths["generated_units_dir"]
     receiver_script = os.path.join(base_dir, "bin", "receive_pass.py")
-    python_bin = config["systemd"]["python_bin"]
+    python_bin = paths["python_bin"]
     service_user = config["systemd"]["service_user"]
 
     pre_start_seconds = config["scheduling"]["pre_start"]

@@ -1,4 +1,4 @@
-#!/python3
+#!/usr/bin/env python3
 # satpi
 # Executes one scheduled satellite pass from start to finish.
 # This includes preparing the pass-specific output directory, starting SatDump
@@ -21,7 +21,6 @@ import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from skyfield.api import load, wgs84, EarthSatellite
-import shutil
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -46,6 +45,7 @@ _TLE_CACHE = {
     "satellites": None,
 }
 
+
 def parse_args():
     parser = argparse.ArgumentParser(description="SATPI pass receiver")
     parser.add_argument("satellite")
@@ -57,6 +57,7 @@ def parse_args():
     parser.add_argument("scheduled_start")
     parser.add_argument("scheduled_end")
     return parser.parse_args()
+
 
 def parse_utc(ts: str) -> datetime:
     return datetime.fromisoformat(ts.replace("Z", "+00:00"))
@@ -77,6 +78,7 @@ def safe_name(value: str) -> str:
     value = value.replace(":", "-")
     return value
 
+
 def setup_logger(log_file: str) -> logging.Logger:
     logger = logging.getLogger("satpi.receive_pass")
     logger.setLevel(logging.INFO)
@@ -94,11 +96,11 @@ def setup_logger(log_file: str) -> logging.Logger:
 
     return logger
 
+
 def build_satdump_command(config, args, pass_output_dir):
     hardware = config["hardware"]
-    satdump = config["satdump"]
+    satdump_bin = config["paths"]["satdump_bin"]
 
-    satdump_bin = satdump["binary_path"]
     sample_rate = str(int(hardware["sample_rate"]))
     frequency_hz = str(args.frequency_hz)
     bandwidth_hz = str(int(args.bandwidth_hz))
@@ -130,13 +132,10 @@ def build_satdump_command(config, args, pass_output_dir):
 
     return cmd, live_pipeline
 
+
 def decode_image(config, logger, args, pass_id, pass_output_dir):
     decode_cfg = config["decode"]
-    satdump = config["satdump"]
-
-    if not decode_cfg["enabled"]:
-        logger.info("Decode disabled in config")
-        return False
+    satdump_bin = config["paths"]["satdump_bin"]
 
     cadu_file = os.path.join(pass_output_dir, f"{args.pipeline}.cadu")
 
@@ -157,7 +156,7 @@ def decode_image(config, logger, args, pass_id, pass_output_dir):
 
     decode_log_path = os.path.join(config["paths"]["log_dir"], f"{pass_id}-decode.log")
     decode_cmd = [
-        satdump["binary_path"],
+        satdump_bin,
         args.pipeline,
         "cadu",
         cadu_file,
@@ -167,7 +166,7 @@ def decode_image(config, logger, args, pass_id, pass_output_dir):
     logger.info("Running decode command: %s", " ".join(decode_cmd))
     logger.info("decode_log=%s", decode_log_path)
 
-    with open(decode_log_path, "w") as decode_log:
+    with open(decode_log_path, "w", encoding="utf-8") as decode_log:
         proc = subprocess.Popen(
             decode_cmd,
             stdout=decode_log,
@@ -194,6 +193,7 @@ def decode_image(config, logger, args, pass_id, pass_output_dir):
     logger.info("Decode finished but output directory not found: %s", success_dir)
     return False
 
+
 def copy_output(config, logger, pass_id, pass_output_dir):
     copy_cfg = config["copytarget"]
 
@@ -204,65 +204,49 @@ def copy_output(config, logger, pass_id, pass_output_dir):
     pass_name = os.path.basename(pass_output_dir)
     copy_type = copy_cfg["type"]
 
-    if copy_type == "rclone":
-        remote = copy_cfg["rclone_remote"]
-        remote_path = copy_cfg["rclone_path"]
+    if copy_type != "rclone":
+        logger.error("Unsupported copy target type: %s", copy_type)
+        return False, None, None
 
-        if not remote or not remote_path:
-            logger.error("rclone target not fully configured")
-            return False, None, None
+    remote = copy_cfg["rclone_remote"]
+    remote_path = copy_cfg["rclone_path"]
 
-        target = f"{remote}:{remote_path}/{pass_name}"
-        upload_log = os.path.join(config["paths"]["log_dir"], f"{os.path.basename(pass_output_dir)}-upload.log")
-        cmd = ["rclone", "copy", pass_output_dir, target]
-        logger.info("Running copy command: %s", " ".join(cmd))
-        logger.info("upload_log=%s", upload_log)
+    if not remote or not remote_path:
+        logger.error("rclone target not fully configured")
+        return False, None, None
 
-        with open(upload_log, "w") as logf:
-            rc = subprocess.call(cmd, stdout=logf, stderr=subprocess.STDOUT)
+    target = f"{remote}:{remote_path}/{pass_name}"
+    upload_log = os.path.join(config["paths"]["log_dir"], f"{pass_name}-upload.log")
+    cmd = ["rclone", "copy", pass_output_dir, target]
+    logger.info("Running copy command: %s", " ".join(cmd))
+    logger.info("upload_log=%s", upload_log)
 
-        logger.info("Copy exited with return code %s", rc)
+    with open(upload_log, "w", encoding="utf-8") as logf:
+        rc = subprocess.call(cmd, stdout=logf, stderr=subprocess.STDOUT)
 
-        if rc != 0:
-            logger.error("Copy failed")
-            return False, target, None
+    logger.info("Copy exited with return code %s", rc)
 
-        link = None
-        if copy_cfg["create_link"]:
-            link_cmd = ["rclone", "link", target]
-            logger.info("Running link command: %s", " ".join(link_cmd))
-            try:
-                result = subprocess.run(link_cmd, capture_output=True, text=True, check=True)
-                link = result.stdout.strip() or None
-                logger.info("Link created: %s", link)
-            except subprocess.CalledProcessError as e:
-                logger.warning("Link creation failed")
-                if e.stdout:
-                    logger.warning("link stdout: %s", e.stdout.strip())
-                if e.stderr:
-                    logger.warning("link stderr: %s", e.stderr.strip())
+    if rc != 0:
+        logger.error("Copy failed")
+        return False, target, None
 
-        return True, target, link
+    link = None
+    if copy_cfg["create_link"]:
+        link_cmd = ["rclone", "link", target]
+        logger.info("Running link command: %s", " ".join(link_cmd))
+        try:
+            result = subprocess.run(link_cmd, capture_output=True, text=True, check=True)
+            link = result.stdout.strip() or None
+            logger.info("Link created: %s", link)
+        except subprocess.CalledProcessError as e:
+            logger.warning("Link creation failed")
+            if e.stdout:
+                logger.warning("link stdout: %s", e.stdout.strip())
+            if e.stderr:
+                logger.warning("link stderr: %s", e.stderr.strip())
 
-    if copy_type == "local":
-        local_path = copy_cfg["local_path"]
-        if not local_path:
-            logger.error("local_path not configured")
-            return False, None, None
+    return True, target, link
 
-        target_dir = os.path.join(local_path, pass_name)
-        logger.info("Copying locally to %s", target_dir)
-
-        if os.path.exists(target_dir):
-            shutil.rmtree(target_dir)
-
-        os.makedirs(os.path.dirname(target_dir), exist_ok=True)
-        shutil.copytree(pass_output_dir, target_dir)
-
-        return True, target_dir, None
-
-    logger.error("Unsupported copy target type: %s", copy_type)
-    return False, None, None
 
 def get_host_identity():
     hostname = socket.gethostname()
@@ -290,7 +274,7 @@ def send_notification(config, logger, args, pass_output_dir, link):
         return True
 
     mail_to = notify_cfg["mail_to"]
-    mail_bin = notify_cfg["mail_bin"]
+    mail_bin = config["paths"]["mail_bin"]
     subject_prefix = notify_cfg["mail_subject_prefix"]
 
     if not mail_to:
@@ -340,6 +324,7 @@ def send_notification(config, logger, args, pass_output_dir, link):
 
     return True
 
+
 def postprocess_output(config, logger, args, pass_id, pass_output_dir, decode_ok):
     copy_ok, target, link = copy_output(config, logger, pass_id, pass_output_dir)
     logger.info("copy_ok=%s", copy_ok)
@@ -356,6 +341,7 @@ def postprocess_output(config, logger, args, pass_id, pass_output_dir, decode_ok
 
     notify_ok = send_notification(config, logger, args, pass_output_dir, link)
     logger.info("notify_ok=%s", notify_ok)
+
 
 def satdump_timestamp_to_utc_iso(date_str: str, time_str: str) -> str:
     dt = datetime.strptime(f"{date_str} {time_str}", "%d/%m/%Y %H:%M:%S")
@@ -412,12 +398,14 @@ def build_reception_json_header(config, args, pass_id):
             "lna": reception_setup["lna"],
             "rf_filter": reception_setup["rf_filter"],
             "feedline": reception_setup["feedline"],
+            "sdr": reception_setup["sdr"],
             "raspberry_pi": reception_setup["raspberry_pi"],
             "power_supply": reception_setup["power_supply"],
             "additional_info": reception_setup["additional_info"],
         },
         "samples": [],
     }
+
 
 def write_json_atomic(target_path: str, payload: dict):
     target = Path(target_path)
@@ -451,6 +439,7 @@ def maybe_build_sample(config, current_radio_state: dict, sync_data: dict, satel
         "azimuth_deg": azimuth_deg,
         "elevation_deg": elevation_deg,
     }
+
 
 def _load_satellites_from_tle_file(tle_path: str):
     mtime = os.path.getmtime(tle_path)
@@ -496,8 +485,9 @@ def _resolve_satellite_from_tle(satellites: dict, satellite_name: str):
 
     raise ValueError(f"Satellite not found in TLE file: {satellite_name}")
 
+
 def compute_az_el(config, sample_timestamp_utc: str, satellite_name: str):
-    tle_file = config["network"]["tle_file"]
+    tle_file = config["paths"]["tle_file"]
 
     satellites = _load_satellites_from_tle_file(tle_file)
     satellite = _resolve_satellite_from_tle(satellites, satellite_name)
@@ -518,8 +508,10 @@ def compute_az_el(config, sample_timestamp_utc: str, satellite_name: str):
 
     return float(round(az.degrees, 3)), float(round(alt.degrees, 3))
 
-def render_reception_plots(base_dir, logger, reception_json_path):
+
+def render_reception_plots(base_dir, logger, config, reception_json_path):
     plot_script = os.path.join(base_dir, "bin", "plot_reception.py")
+    python_bin = config["paths"]["python_bin"]
 
     if not os.path.exists(plot_script):
         logger.warning("plot_reception.py not found: %s", plot_script)
@@ -530,7 +522,7 @@ def render_reception_plots(base_dir, logger, reception_json_path):
         return False
 
     cmd = [
-        sys.executable,
+        python_bin,
         plot_script,
         reception_json_path,
     ]
@@ -555,15 +547,8 @@ def render_reception_plots(base_dir, logger, reception_json_path):
 
     return True
 
+
 def import_reception_to_db(config, logger, reception_json_path: str) -> bool:
-    if not config.get("reception_db", {}).get("enabled", False):
-        logger.info("reception_db disabled in config, skipping DB import")
-        return False
-
-    if not config.get("reception_db", {}).get("import_after_pass", True):
-        logger.info("reception_db import_after_pass=false, skipping DB import")
-        return False
-
     if not os.path.exists(reception_json_path):
         logger.warning("reception JSON not found, cannot import to DB: %s", reception_json_path)
         return False
@@ -571,13 +556,14 @@ def import_reception_to_db(config, logger, reception_json_path: str) -> bool:
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     importer_path = os.path.join(base_dir, "bin", "import_reception_to_db.py")
     config_path = os.path.join(base_dir, "config", "config.ini")
+    python_bin = config["paths"]["python_bin"]
 
     if not os.path.exists(importer_path):
         logger.warning("DB importer script not found: %s", importer_path)
         return False
 
     cmd = [
-        config["systemd"]["python_bin"],
+        python_bin,
         importer_path,
         "--config",
         config_path,
@@ -606,6 +592,7 @@ def import_reception_to_db(config, logger, reception_json_path: str) -> bool:
     logger.info("DB import completed successfully")
     return True
 
+
 def main():
     args = parse_args()
 
@@ -620,6 +607,7 @@ def main():
 
     log_dir = config["paths"]["log_dir"]
     output_dir = config["paths"]["output_dir"]
+    satdump_bin = config["paths"]["satdump_bin"]
 
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
@@ -628,9 +616,7 @@ def main():
     local_pass_start = format_local_filename_timestamp(args.pass_start, timezone_name)
 
     pass_id = f"{local_pass_start}_{safe_name(args.satellite)}"
-
     pass_output_dir = os.path.join(output_dir, pass_id)
-
     os.makedirs(pass_output_dir, exist_ok=True)
 
     log_file = os.path.join(log_dir, f"{pass_id}-receive_pass.log")
@@ -655,31 +641,19 @@ def main():
     logger.info("cwd=%s", os.getcwd())
 
     hardware = config["hardware"]
-    satdump = config["satdump"]
     copytarget = config["copytarget"]
 
     logger.info("config.hardware.source_id=%s", hardware["source_id"])
     logger.info("config.hardware.gain=%s", hardware["gain"])
     logger.info("config.hardware.sample_rate=%s", hardware["sample_rate"])
     logger.info("config.hardware.bias_t=%s", hardware["bias_t"])
-    logger.info("config.hardware.ppm_correction=%s", hardware["ppm_correction"])
 
-    logger.info("config.satdump.enabled=%s", satdump["enabled"])
-    logger.info("config.satdump.binary_path=%s", satdump["binary_path"])
-    logger.info("config.satdump.threads=%s", satdump["threads"])
-    logger.info("config.satdump.realtime=%s", satdump["realtime"])
-
+    logger.info("config.paths.satdump_bin=%s", satdump_bin)
     logger.info("config.copytarget.enabled=%s", copytarget["enabled"])
     logger.info("config.copytarget.type=%s", copytarget["type"])
-    logger.info("config.copytarget.local_path=%s", copytarget["local_path"])
 
-    if not satdump["enabled"]:
-        logger.info("SatDump disabled in config, exiting without running SatDump")
-        logger.info("receive_pass.py finished successfully")
-        return 0
-
-    if not os.path.exists(satdump["binary_path"]):
-        logger.error("SatDump binary not found: %s", satdump["binary_path"])
+    if not os.path.exists(satdump_bin):
+        logger.error("SatDump binary not found: %s", satdump_bin)
         return 1
 
     cmd, live_pipeline = build_satdump_command(config, args, pass_output_dir)
@@ -762,7 +736,7 @@ def main():
         db_import_ok = import_reception_to_db(config, logger, reception_json_path)
         logger.info("db_import_ok=%s", db_import_ok)
 
-        plots_ok = render_reception_plots(base_dir, logger, reception_json_path)
+        plots_ok = render_reception_plots(base_dir, logger, config, reception_json_path)
         logger.info("plots_ok=%s", plots_ok)
 
         decode_ok = decode_image(config, logger, args, pass_id, pass_output_dir)
@@ -779,7 +753,7 @@ def main():
     db_import_ok = import_reception_to_db(config, logger, reception_json_path)
     logger.info("db_import_ok=%s", db_import_ok)
 
-    plots_ok = render_reception_plots(base_dir, logger, reception_json_path)
+    plots_ok = render_reception_plots(base_dir, logger, config, reception_json_path)
     logger.info("plots_ok=%s", plots_ok)
 
     decode_ok = decode_image(config, logger, args, pass_id, pass_output_dir)
@@ -789,6 +763,7 @@ def main():
     logger.info("receive_pass.py finished successfully")
 
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

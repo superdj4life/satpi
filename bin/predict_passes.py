@@ -63,13 +63,13 @@ def compute_passes_for_satellite(ts, observer, sat_obj, sat_cfg, start_dt, end_d
     t0 = ts.from_datetime(start_dt)
     t1 = ts.from_datetime(end_dt)
 
-# Use true AOS/LOS at horizon for scheduling.
-# Keep min_elevation only as a quality filter via max_elevation check below.
+    # Use true AOS/LOS at horizon for scheduling.
+    # Keep min_elevation only as a quality filter via max_elevation check below.
     t_events, events = sat_obj.find_events(
-    observer,
-    t0,
-    t1,
-    altitude_degrees=0.0,
+        observer,
+        t0,
+        t1,
+        altitude_degrees=0.0,
     )
 
     passes = []
@@ -134,8 +134,9 @@ def write_passes_json(pass_file, passes):
         "passes": sorted(passes, key=lambda p: p["start"]),
     }
 
-    with open(tmp_file, "w") as f:
+    with open(tmp_file, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
+        f.write("\n")
 
     os.replace(tmp_file, pass_file)
 
@@ -154,11 +155,11 @@ def main():
 
     qth = config["qth"]
     scheduling = config["scheduling"]
-    network = config["network"]
+    paths = config["paths"]
     satellites = [s for s in config["satellites"] if s["enabled"]]
 
-    tle_file = network["tle_file"]
-    pass_file = config["paths"]["pass_file"]
+    tle_file = paths["tle_file"]
+    pass_file = paths["pass_file"]
 
     if not os.path.exists(tle_file):
         raise FileNotFoundError(f"TLE file not found: {tle_file}")
