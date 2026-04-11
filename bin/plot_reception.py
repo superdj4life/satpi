@@ -12,10 +12,9 @@ import json
 import math
 import os
 from datetime import datetime
-from pathlib import Path
 
-import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 
 
 def parse_args():
@@ -80,6 +79,11 @@ def prepare_samples(samples: list[dict]) -> list[dict]:
     prepared.sort(key=lambda x: x["timestamp"])
     return prepared
 
+
+def get_visible_samples(samples: list[dict]) -> list[dict]:
+    return [s for s in samples if s["elevation_deg"] >= 0.0]
+
+
 def plot_skyplot(data: dict, samples: list[dict], output_path: str):
     visible_samples = get_visible_samples(samples)
 
@@ -125,7 +129,6 @@ def plot_skyplot(data: dict, samples: list[dict], output_path: str):
         color = state_color(s1["sync_state"])
         ax.plot(theta, radius, linewidth=2.5, color=color)
 
-    # mark first and last visible points
     start = visible_samples[0]
     end = visible_samples[-1]
 
@@ -156,7 +159,6 @@ def plot_skyplot(data: dict, samples: list[dict], output_path: str):
         label="End",
     )
 
-    # optional helper labels so the markers are unmistakable
     ax.annotate(
         "Start",
         xy=(start_theta, start_radius),
@@ -210,6 +212,7 @@ def plot_skyplot(data: dict, samples: list[dict], output_path: str):
     fig.savefig(output_path, dpi=150)
     plt.close(fig)
 
+
 def merge_segments_by_state(samples: list[dict]) -> list[tuple[datetime, datetime, str]]:
     if not samples:
         return []
@@ -228,8 +231,6 @@ def merge_segments_by_state(samples: list[dict]) -> list[tuple[datetime, datetim
     segments.append((seg_start, samples[-1]["timestamp"], current_state))
     return segments
 
-def get_visible_samples(samples: list[dict]) -> list[dict]:
-    return [s for s in samples if s["elevation_deg"] >= 0.0]
 
 def plot_timeseries(data: dict, samples: list[dict], output_path: str):
     if not samples:
@@ -242,7 +243,6 @@ def plot_timeseries(data: dict, samples: list[dict], output_path: str):
     fig, ax1 = plt.subplots(figsize=(16, 6))
     fig.subplots_adjust(right=0.72)
 
-    # background sync-state bands
     for start, end, state in merge_segments_by_state(samples):
         ax1.axvspan(start, end, alpha=0.15, color=state_color(state))
 
@@ -284,6 +284,7 @@ def plot_timeseries(data: dict, samples: list[dict], output_path: str):
     fig.savefig(output_path, dpi=150)
     plt.close(fig)
 
+
 def build_metadata_text(data: dict) -> str:
     reception_setup = data.get("reception_setup", {})
 
@@ -301,6 +302,7 @@ def build_metadata_text(data: dict) -> str:
         f"LNA: {reception_setup.get('lna', '-')}",
         f"RF filter: {reception_setup.get('rf_filter', '-')}",
         f"Feedline: {reception_setup.get('feedline', '-')}",
+        f"SDR: {reception_setup.get('sdr', '-')}",
         f"Raspberry Pi: {reception_setup.get('raspberry_pi', '-')}",
         f"Power supply: {reception_setup.get('power_supply', '-')}",
         f"Pass start: {data.get('pass_start', '-')}",
@@ -312,6 +314,7 @@ def build_metadata_text(data: dict) -> str:
         lines.append(f"Additional info: {additional_info}")
 
     return "\n".join(lines)
+
 
 def main():
     args = parse_args()
@@ -326,7 +329,7 @@ def main():
     if args.output_dir:
         output_dir = os.path.abspath(args.output_dir)
     else:
-       output_dir = os.path.dirname(input_json)
+        output_dir = os.path.dirname(input_json)
 
     os.makedirs(output_dir, exist_ok=True)
 

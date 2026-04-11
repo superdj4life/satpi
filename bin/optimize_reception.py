@@ -298,7 +298,26 @@ def select_comparable_passes(metrics_list: list[PassMetrics], settings: dict[str
         }
 
     reference = max(candidates, key=lambda m: m.culmination_elevation_deg)
-    comparable = [m for m in candidates if passes_are_comparable(reference, m, settings)]
+
+    comparable = []
+
+    for m in candidates:
+        is_match = passes_are_comparable(reference, m, settings)
+        print(
+            "[optimize_reception] compare",
+            f"ref={reference.pass_id}",
+            f"cand={m.pass_id}",
+            f"sat={m.satellite}",
+            f"pipe={m.pipeline}",
+            f"dir={m.direction}",
+            f"aos={m.aos_azimuth_deg}",
+            f"culm_az={m.culmination_azimuth_deg}",
+            f"los={m.los_azimuth_deg}",
+            f"culm_el={m.culmination_elevation_deg}",
+            f"match={is_match}",
+        )
+        if is_match:
+            comparable.append(m)
 
     stats = {
         "total_metrics": len(metrics_list),
