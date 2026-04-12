@@ -38,8 +38,9 @@ def parse_args():
     )
     parser.add_argument(
         "--satellite",
+        action="append",
         default=None,
-        help="Optional satellite filter, e.g. 'METEOR-M2 4'",
+        help="Satellite filter. Repeat option or use comma-separated values, e.g. --satellite 'METEOR-M2 4' or --satellite 'METEOR-M2 3,METEOR-M2 4'",
     )
     parser.add_argument(
         "--pipeline",
@@ -63,7 +64,6 @@ def parse_args():
     )
     return parser.parse_args()
 
-
 def derive_sync_state(viterbi_state: str | None, deframer_state: str | None) -> str:
     if deframer_state == "SYNCED":
         return "SYNCED"
@@ -79,6 +79,18 @@ def state_color(state: str) -> str:
         return "gold"
     return "red"
 
+def normalize_satellite_filters(raw_filters):
+    if not raw_filters:
+        return None
+
+    values = []
+    for item in raw_filters:
+        for part in item.split(","):
+            value = part.strip()
+            if value:
+                values.append(value)
+
+    return values or None
 
 def angular_delta_deg(a1: float, a2: float) -> float:
     diff = abs(a2 - a1)
@@ -92,8 +104,7 @@ def open_db(db_path: str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     return conn
 
-
-def load_samples(db_path: str, satellite: str | None, pipeline: str | None):
+def load_samples(db_path: str, satellites: list[str] | None, pipeline: str | None):
     conn = open_db(db_path)
     try:
         sql = """
@@ -115,21 +126,41 @@ def load_samples(db_path: str, satellite: str | None, pipeline: str | None):
         """
         params = []
 
-        if satellite:
-            sql += " AND h.satellite = ?"
-            params.append(satellite)
+        if satellites:
+            placeholders = ",".join("?" for _ in satellites)
+            sql += f" AND h.satellite IN ({placeholders})"
+            params.extend(satellites)
 
         if pipeline:
             sql += " AND h.pipeline = ?"
             params.append(pipeline)
 
-        sql += " ORDER BY h.pass_id, d.timestamp"
+        sql += " ORDER BY h.satellite, h.pass_id, d.timestamp"
 
         rows = conn.execute(sql, params).fetchall()
         return rows
     finally:
         conn.close()
 
+def build_satellite_arrow_colors(pass_map):
+    color_cycle = [
+        "blue",
+        "magenta",
+        "cyan",
+        "black",
+        "orange",
+        "purple",
+        "brown",
+        "navy",
+    ]
+
+    satellites = sorted({samples[0]["satellite"] for samples in pass_map.values() if samples})
+    mapping = {}
+
+    for idx, satellite in enumerate(satellites):
+        mapping[satellite] = color_cycle[idx % len(color_cycle)]
+
+    return mapping
 
 def build_pass_map(rows, only_visible: bool, synced_only: bool, include_syncing: bool):
     passes = defaultdict(list)
@@ -179,7 +210,6 @@ def ensure_parent_dir(path: str):
     if parent:
         os.makedirs(parent, exist_ok=True)
 
-
 def draw_super_satplot(pass_map, output_path: str, title: str):
     import matplotlib.pyplot as plt
 
@@ -194,6 +224,8 @@ def draw_super_satplot(pass_map, output_path: str, title: str):
     ax.set_rlabel_position(225)
     ax.set_title(title, va="bottom")
 
+    satellite_arrow_colors = build_satellite_arrow_colors(pass_map)
+
     total_segments = 0
     pass_count = 0
 
@@ -202,6 +234,8 @@ def draw_super_satplot(pass_map, output_path: str, title: str):
             continue
 
         pass_count += 1
+        satellite_name = samples[0]["satellite"]
+        arrow_color = satellite_arrow_colors[satellite_name]
 
         for i in range(len(samples) - 1):
             s1 = samples[i]
@@ -223,7 +257,14 @@ def draw_super_satplot(pass_map, output_path: str, title: str):
             linewidth = 1.2 if s1["sync_state"] == "NOSYNC" else 2.0
             alpha = 0.35 if s1["sync_state"] == "NOSYNC" else 0.8
 
-            ax.plot(theta, radius, color=color, linewidth=linewidth, alpha=alpha)
+            ax.plot(
+                theta,
+                radius,
+                color=color,
+                linewidth=linewidth,
+                alpha=alpha,
+                linestyle="-",
+            )
             total_segments += 1
 
         visible_samples = [s for s in samples if s["elevation_deg"] >= 0.0]
@@ -242,8 +283,8 @@ def draw_super_satplot(pass_map, output_path: str, title: str):
                 xytext=(start_theta, start_radius),
                 arrowprops=dict(
                     arrowstyle="simple",
-                    fc="blue",
-                    ec="blue",
+                    fc=arrow_color,
+                    ec=arrow_color,
                     lw=0.0,
                     alpha=0.95,
                     shrinkA=0,
@@ -253,19 +294,33 @@ def draw_super_satplot(pass_map, output_path: str, title: str):
                 zorder=80,
             )
 
-    legend_handles = [
+    sync_legend_handles = [
         plt.Line2D([0], [0], color="red", lw=3, label="NOSYNC"),
         plt.Line2D([0], [0], color="gold", lw=3, label="SYNCING"),
         plt.Line2D([0], [0], color="green", lw=3, label="SYNCED"),
-        plt.Line2D([0], [0], color="blue", lw=2, label="Start direction"),
+    ]
+
+    satellite_legend_handles = [
+        plt.Line2D([0], [0], color=color, lw=0, marker=">", markersize=9, label=satellite)
+        for satellite, color in sorted(satellite_arrow_colors.items())
     ]
 
     fig.legend(
-        handles=legend_handles,
+        handles=sync_legend_handles,
         loc="lower left",
-        bbox_to_anchor=(0.72, 0.20),
+        bbox_to_anchor=(0.72, 0.22),
         fontsize=8,
         frameon=True,
+        title="Sync state",
+    )
+
+    fig.legend(
+        handles=satellite_legend_handles,
+        loc="lower left",
+        bbox_to_anchor=(0.72, 0.02),
+        fontsize=8,
+        frameon=True,
+        title="Satellite",
     )
 
     info_lines = [
@@ -311,7 +366,9 @@ def main():
         "plot_all_receptions.png",
     )
 
-    rows = load_samples(db_path, args.satellite, args.pipeline)
+    satellite_filters = normalize_satellite_filters(args.satellite)
+
+    rows = load_samples(db_path, satellite_filters, args.pipeline)
     if not rows:
         raise SystemExit("No matching rows found in database")
 
@@ -327,8 +384,8 @@ def main():
         raise SystemExit("No usable passes after filtering")
 
     title_parts = ["satpi All Receptions Plot"]
-    if args.satellite:
-        title_parts.append(args.satellite)
+    if satellite_filters:
+        title_parts.append(", ".join(satellite_filters))
     if args.pipeline:
         title_parts.append(args.pipeline)
     if args.synced_only:
