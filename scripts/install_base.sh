@@ -117,6 +117,9 @@ press_enter
 
 section "INSTALL REQUIRED PACKAGES"
 
+# prevent msmtp AppArmor dialog
+echo 'msmtp msmtp/apparmor boolean false' | sudo debconf-set-selections
+
 sudo apt install -y \
   git \
   cmake \
