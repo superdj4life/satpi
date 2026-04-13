@@ -376,7 +376,10 @@ def parse_satdump_sync_line(line: str):
 
 def build_reception_json_header(config, args, pass_id):
     hardware = config["hardware"]
-    reception_setup = config["reception_setup"]
+    reception_setup = {
+        key: str(value)
+        for key, value in config["reception_setup"].items()
+    }
 
     return {
         "pass_id": pass_id,
@@ -391,21 +394,9 @@ def build_reception_json_header(config, args, pass_id):
         "pass_end": args.pass_end,
         "scheduled_start": args.scheduled_start,
         "scheduled_end": args.scheduled_end,
-        "reception_setup": {
-            "antenna_type": reception_setup["antenna_type"],
-            "antenna_location": reception_setup["antenna_location"],
-            "antenna_orientation": reception_setup["antenna_orientation"],
-            "lna": reception_setup["lna"],
-            "rf_filter": reception_setup["rf_filter"],
-            "feedline": reception_setup["feedline"],
-            "sdr": reception_setup["sdr"],
-            "raspberry_pi": reception_setup["raspberry_pi"],
-            "power_supply": reception_setup["power_supply"],
-            "additional_info": reception_setup["additional_info"],
-        },
+        "reception_setup": reception_setup,
         "samples": [],
     }
-
 
 def write_json_atomic(target_path: str, payload: dict):
     target = Path(target_path)
@@ -509,22 +500,19 @@ def compute_az_el(config, sample_timestamp_utc: str, satellite_name: str):
     return float(round(az.degrees, 3)), float(round(alt.degrees, 3))
 
 
-def render_reception_plots(base_dir, logger, config, reception_json_path):
-    plot_script = os.path.join(base_dir, "bin", "plot_reception.py")
+def render_reception_plots(base_dir, logger, config, pass_id: str):
+    plot_script = os.path.join(base_dir, "bin", "plot_receptions.py")
     python_bin = config["paths"]["python_bin"]
 
     if not os.path.exists(plot_script):
-        logger.warning("plot_reception.py not found: %s", plot_script)
-        return False
-
-    if not os.path.exists(reception_json_path):
-        logger.warning("reception JSON not found, skipping plots: %s", reception_json_path)
+        logger.warning("plot_receptions.py not found: %s", plot_script)
         return False
 
     cmd = [
         python_bin,
         plot_script,
-        reception_json_path,
+        "--pass-id",
+        pass_id,
     ]
 
     logger.info("Running plot command: %s", " ".join(cmd))
@@ -533,9 +521,10 @@ def render_reception_plots(base_dir, logger, config, reception_json_path):
         cmd,
         text=True,
         capture_output=True,
+        cwd=base_dir,
     )
 
-    logger.info("plot_reception.py exited with return code %s", result.returncode)
+    logger.info("plot_receptions.py exited with return code %s", result.returncode)
     if result.stdout.strip():
         logger.info("plot stdout: %s", result.stdout.strip())
     if result.stderr.strip():
@@ -547,7 +536,6 @@ def render_reception_plots(base_dir, logger, config, reception_json_path):
 
     return True
 
-
 def import_reception_to_db(config, logger, reception_json_path: str) -> bool:
     if not os.path.exists(reception_json_path):
         logger.warning("reception JSON not found, cannot import to DB: %s", reception_json_path)
@@ -555,7 +543,6 @@ def import_reception_to_db(config, logger, reception_json_path: str) -> bool:
 
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     importer_path = os.path.join(base_dir, "bin", "import_reception_to_db.py")
-    config_path = os.path.join(base_dir, "config", "config.ini")
     python_bin = config["paths"]["python_bin"]
 
     if not os.path.exists(importer_path):
@@ -565,8 +552,6 @@ def import_reception_to_db(config, logger, reception_json_path: str) -> bool:
     cmd = [
         python_bin,
         importer_path,
-        "--config",
-        config_path,
         reception_json_path,
     ]
 
@@ -736,7 +721,7 @@ def main():
         db_import_ok = import_reception_to_db(config, logger, reception_json_path)
         logger.info("db_import_ok=%s", db_import_ok)
 
-        plots_ok = render_reception_plots(base_dir, logger, config, reception_json_path)
+        plots_ok = render_reception_plots(base_dir, logger, config, pass_id)
         logger.info("plots_ok=%s", plots_ok)
 
         decode_ok = decode_image(config, logger, args, pass_id, pass_output_dir)
@@ -753,7 +738,7 @@ def main():
     db_import_ok = import_reception_to_db(config, logger, reception_json_path)
     logger.info("db_import_ok=%s", db_import_ok)
 
-    plots_ok = render_reception_plots(base_dir, logger, config, reception_json_path)
+    plots_ok = render_reception_plots(base_dir, logger, config, pass_id)
     logger.info("plots_ok=%s", plots_ok)
 
     decode_ok = decode_image(config, logger, args, pass_id, pass_output_dir)
