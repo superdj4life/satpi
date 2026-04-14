@@ -140,60 +140,79 @@ satpi/
 ## File overview
 
 ### `bin/load_config.py`
+
 Loads, parses, and validates the central `config.ini` file. It resolves relative project paths against `paths.base_dir` and converts configuration values into typed Python data structures.
 
 ### `bin/update_tle.py`
+
 Downloads current TLE data from the configured source and filters it so that only the satellites used by this installation remain in the local TLE file.
 
 ### `bin/predict_passes.py`
+
 Calculates upcoming satellite passes for the configured ground station based on the filtered local TLE file.
 
 ### `bin/schedule_passes.py`
+
 Reads the predicted pass data and generates one systemd service and one systemd timer for every future pass that should still be received.
 
 ### `bin/receive_pass.py`
+
 Executes one scheduled pass from start to finish. It prepares the pass-specific output directory, starts SatDump, records structured reception data into `reception.json`, renders plots, imports metrics into SQLite, triggers decode, copies the results, and optionally sends a notification email.
 
 ### `bin/plot_reception.py`
+
 Creates a skyplot and a reception time-series plot from `reception.json`.
 
 ### `bin/init_reception_db.py`
+
 Initializes the SQLite database schema used for reception history and analysis.
 
 ### `bin/import_reception_to_db.py`
+
 Imports pass-level metrics and setup information from `reception.json` into the SQLite reception database.
 
 ### `bin/query_reception_db.py`
+
 Queries the SQLite reception database for analysis and reporting.
 
 ### `bin/optimize_reception.py`
+
 Analyzes recorded reception data from SQLite and compares geometrically similar passes to evaluate reception performance.
 
 ### `bin/optimize_reception_ai.py`
-Builds on the optimizer output and produces an AI-assisted interpretation of reception quality trends.
+
+Builds on the optimizer output and produces an AI-assisted interpretation of reception quality trends using either OpenAI or an Ollama server.
 
 ### `bin/export_reception_report_pdf.py`
+
 Exports reception analysis results into PDF format.
 
 ### `bin/generate_refresh_units.py`
+
 Creates and enables the refresh service and timer that periodically run the higher-level planning chain.
 
 ### `config/config.example.ini`
+
 Public example configuration file for new installations. Copy this file to `config/config.ini` before first use.
 
 ### `config/config.ini`
+
 Active local configuration file used by the satpi scripts on a running system. This file is intentionally local and should not be committed.
 
 ### `scripts/install_base.sh`
+
 Interactive base installation script for Raspberry Pi OS. It installs required packages, applies base operating system settings, prepares the directory structure, and builds the required SatDump binary.
 
 ### `systemd/satpi-refresh.service`
+
 Systemd service that executes the periodic satpi refresh workflow.
 
 ### `systemd/satpi-refresh.timer`
+
 Systemd timer that periodically triggers `satpi-refresh.service`.
 
 ### `systemd/generated/`
+
 Contains the generated per-pass systemd service and timer files created by `schedule_passes.py`.
 
 ## Configuration
@@ -255,7 +274,10 @@ Before running satpi, at minimum you should review and adapt these settings in `
 
 - **`[optimize_reception_ai]`**
   - `enabled`
-  - `api_key` if you want AI-assisted optimizer analysis
+  - `provider` (`openai` or `ollama`)
+  - `model`
+  - `base_url` for remote Ollama or custom API endpoints
+  - `api_key` for OpenAI, or optional auth in front of Ollama
 
 If you only want the basic reception pipeline first, the most important items are:
 
@@ -393,6 +415,18 @@ Run AI-based optimizer analysis manually:
 
 ```bash
 python3 bin/optimize_reception_ai.py --config config/config.ini
+```
+
+Example for a remote Ollama host in `config.ini`:
+
+```ini
+[optimize_reception_ai]
+enabled = true
+provider = ollama
+model = llama3.1:8b
+base_url = http://YOUR-OLLAMA-SERVER:11434
+request_timeout_seconds = 120
+api_key =
 ```
 
 ## Output

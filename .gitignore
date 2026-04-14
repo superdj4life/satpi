@@ -18,3 +18,4 @@ results/database/
 *.pyc
 testdata/
 *.log
+claude.md

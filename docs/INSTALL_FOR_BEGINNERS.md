@@ -44,6 +44,7 @@ When Raspberry Pi Imager asks whether you want to apply OS customisation setting
 Set at least the following:
 
 ### General
+
 - hostname, for example: `satpi`
 - username, for example: `andreas`
 - password
@@ -52,6 +53,7 @@ Set at least the following:
 - Wi-Fi country
 
 ### Services
+
 - enable **SSH**
 
 Then save the settings and continue.
@@ -75,23 +77,24 @@ Raspberry Pi documents that Raspberry Pi Imager can preconfigure a hostname, use
 From your computer, open a terminal.
 
 ### On macOS
+
 Use Terminal.
 
 ### On Windows
+
 Use PowerShell or PuTTY.
 
 Connect with:
 
 bash
-ssh YOUR_USER@HOSTNAME.local
+ssh <YOUR_USER@HOSTNAME.local>
 
 ## Quick start after cloning
 
 sudo apt update
 sudo apt install -y git
-git clone https://github.com/HorvathAndreas/satpi.git
-you can copy/paste: sudo apt update && sudo apt install -y git && git clone https://github.com/HorvathAndreas/satpi.git
-
+git clone <https://github.com/HorvathAndreas/satpi.git>
+you can copy/paste: sudo apt update && sudo apt install -y git && git clone <https://github.com/HorvathAndreas/satpi.git>
 
 cd ~/satpi
 scripts/install_base.sh
@@ -107,7 +110,7 @@ make all necessary changes in the config.ini file.
 
 rclone config
 
-printf "Subject: satpi test\n\nTest mail.\n" | /usr/bin/msmtp you@example.com
+printf "Subject: satpi test\n\nTest mail.\n" | /usr/bin/msmtp <you@example.com>
 
 python3 bin/test_config.py
 python3 bin/update_tle.py

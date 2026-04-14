@@ -16,12 +16,6 @@ CONFIG_DIR="${SATPI_DIR}/config"
 CONFIG_EXAMPLE="${CONFIG_DIR}/config.example.ini"
 CONFIG_LOCAL="${CONFIG_DIR}/config.ini"
 
-press_enter() {
-    echo
-    read -r -p "Press Enter to continue..."
-    echo
-}
-
 section() {
     echo
     echo "============================================================"
@@ -61,14 +55,10 @@ It will NOT fully automate:
 You should run this script on Raspberry Pi OS Lite 64-bit.
 EOF
 
-press_enter
-
 section "UPDATE SYSTEM"
 
 sudo apt update
 sudo apt full-upgrade -y
-
-press_enter
 
 section "SET CPU GOVERNOR TO PERFORMANCE"
 
@@ -89,22 +79,24 @@ sudo systemctl daemon-reload
 sudo systemctl enable cpu-performance.service
 sudo systemctl start cpu-performance.service
 
-press_enter
-
 section "CONFIGURE LOCALE"
 
-sudo sed -i 's/^# *en_GB.UTF-8 UTF-8/en_GB.UTF-8 UTF-8/' /etc/locale.gen
-sudo locale-gen
-sudo update-locale LANG=en_GB.UTF-8
+SATPI_LOCALE="en_GB.UTF-8"
 
-sudo tee /etc/environment >/dev/null <<'EOF'
+if locale -a 2>/dev/null | grep -qi '^en_GB\.utf-?8$'; then
+    info "${SATPI_LOCALE} already exists. Skipping locale configuration."
+else
+    sudo sed -i 's/^# *en_GB.UTF-8 UTF-8/en_GB.UTF-8 UTF-8/' /etc/locale.gen
+    sudo locale-gen "${SATPI_LOCALE}"
+    sudo update-locale LANG="${SATPI_LOCALE}"
+
+    sudo tee /etc/environment >/dev/null <<'EOF'
 LANG=en_GB.UTF-8
 LC_ALL=en_GB.UTF-8
 EOF
 
-sudo sed -i 's/^AcceptEnv LANG LC_/#AcceptEnv LANG LC_/g' /etc/ssh/sshd_config || true
-
-press_enter
+    sudo sed -i 's/^AcceptEnv LANG LC_/#AcceptEnv LANG LC_/g' /etc/ssh/sshd_config || true
+fi
 
 section "DISABLE SERVICES UNNEEDED FOR HEADLESS OPERATION"
 
@@ -112,8 +104,6 @@ sudo systemctl disable --now ModemManager.service || true
 sudo systemctl disable --now getty@tty1.service || true
 sudo systemctl mask serial-getty@ttyAMA10.service || true
 sudo systemctl stop serial-getty@ttyAMA10.service || true
-
-press_enter
 
 section "INSTALL REQUIRED PACKAGES"
 
@@ -156,8 +146,6 @@ sudo apt install -y \
   msmtp \
   rsync
 
-press_enter
-
 section "BLOCK DVB-T DRIVERS"
 
 sudo tee /etc/modprobe.d/blacklist-rtl2832.conf >/dev/null <<'EOF'
@@ -169,14 +157,10 @@ EOF
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 
-press_enter
-
 section "PREPARE SOURCE DIRECTORY"
 
 sudo mkdir -p /usr/local/src
 sudo chown -R "$USER:$USER" /usr/local/src
-
-press_enter
 
 section "PREPARE SATPI DIRECTORY STRUCTURE"
 
@@ -195,53 +179,93 @@ else
     fi
 fi
 
-press_enter
-
 section "BUILD SATDUMP HEADLESS"
 
-cat <<'EOF'
+SATDUMP_BUILD_VERSION="1.2.3"
+
+detect_satdump_installation() {
+    local candidate resolved
+    local -a candidates=()
+    local -A seen=()
+
+    if command -v satdump >/dev/null 2>&1; then
+        candidates+=("$(command -v satdump)")
+    fi
+
+    for candidate in \
+        /usr/bin/satdump \
+        /usr/local/bin/satdump \
+        /opt/SatDump/bin/satdump \
+        /opt/satdump/bin/satdump
+    do
+        if [[ -x "$candidate" ]]; then
+            candidates+=("$candidate")
+        fi
+    done
+
+    SATDUMP_PATH=""
+
+    for candidate in "${candidates[@]}"; do
+        resolved="$(readlink -f "$candidate" 2>/dev/null || printf '%s\n' "$candidate")"
+        if [[ -n "${seen[$resolved]:-}" ]]; then
+            continue
+        fi
+        seen[$resolved]=1
+
+        SATDUMP_PATH="$candidate"
+        return 0
+    done
+
+    return 1
+}
+
+SATDUMP_INSTALLED=false
+if detect_satdump_installation; then
+    info "SatDump detected at ${SATDUMP_PATH}. Skipping build."
+    SATDUMP_INSTALLED=true
+fi
+
+if [[ "$SATDUMP_INSTALLED" == false ]]; then
+    cat <<EOF
 SatDump is required for satpi.
 
 This script will:
 - clone SatDump if it is not already present
-- switch to stable version 1.2.2
+- switch to stable version ${SATDUMP_BUILD_VERSION}
 - build a headless version
 - install it to /usr/bin/satdump
 EOF
 
-press_enter
+    cd /usr/local/src
 
-cd /usr/local/src
+    if [[ ! -d SatDump ]]; then
+        git clone https://github.com/SatDump/SatDump.git
+    fi
 
-if [[ ! -d SatDump ]]; then
-    git clone https://github.com/SatDump/SatDump.git
+    cd SatDump
+    sudo chown -R "$USER:$USER" .
+    git fetch --all --tags
+    git checkout "${SATDUMP_BUILD_VERSION}"
+
+    rm -rf build
+    mkdir build
+    cd build
+
+    cmake .. \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=/usr \
+      -DSATDUMP_BUILD_UI=OFF \
+      -DSATDUMP_BUILD_GUI=OFF \
+      -DSATDUMP_BUILD_TESTS=OFF \
+      -DCMAKE_C_FLAGS="-O3 -march=native -pipe" \
+      -DCMAKE_CXX_FLAGS="-O3 -march=native -pipe" \
+      -DCMAKE_EXE_LINKER_FLAGS="-s"
+
+    cmake --build . -j "$(nproc)"
+    sudo cmake --install .
+
+    info "SatDump ${SATDUMP_BUILD_VERSION} installed."
 fi
-
-cd SatDump
-sudo chown -R "$USER:$USER" .
-git fetch --all --tags
-git checkout 1.2.2
-
-rm -rf build
-mkdir build
-cd build
-
-cmake .. \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_INSTALL_PREFIX=/usr \
-  -DSATDUMP_BUILD_UI=OFF \
-  -DSATDUMP_BUILD_GUI=OFF \
-  -DSATDUMP_BUILD_TESTS=OFF \
-  -DCMAKE_C_FLAGS="-O3 -march=native -pipe" \
-  -DCMAKE_CXX_FLAGS="-O3 -march=native -pipe" \
-  -DCMAKE_EXE_LINKER_FLAGS="-s"
-
-cmake --build . -j "$(nproc)"
-sudo cmake --install .
-
-info "SatDump installed."
-
-press_enter
 
 section "CHECK INSTALLED TOOLS"
 
@@ -253,23 +277,11 @@ for cmd in python3 git curl jq rclone msmtp cmake; do
     fi
 done
 
-if command -v satdump >/dev/null 2>&1; then
-    echo "[OK] satdump -> $(command -v satdump)"
+if detect_satdump_installation; then
+    echo "[OK] satdump -> ${SATDUMP_PATH}"
 else
     echo "[MISSING] satdump"
 fi
-
-section "CHECK INSTALLED TOOLS"
-
-for cmd in python3 git curl jq rclone msmtp; do
-    if command -v "$cmd" >/dev/null 2>&1; then
-        echo "[OK] $cmd -> $(command -v "$cmd")"
-    else
-        echo "[MISSING] $cmd"
-    fi
-done
-
-press_enter
 
 section "REQUIRED MANUAL STEPS"
 
@@ -298,8 +310,6 @@ Manual steps still required:
    cd "${SATPI_DIR}"
    python3 bin/generate_refresh_units.py
 EOF
-
-press_enter
 
 section "BASE INSTALLATION COMPLETE"
 
