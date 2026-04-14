@@ -118,10 +118,10 @@ def _parse_satellites(p) -> List[Dict[str, Any]]:
             "frequency": s.getint("frequency_hz"),
             "bandwidth": s.getint("bandwidth_hz"),
             "pipeline": s.get("pipeline"),
+            "pass_direction": s.get("pass_direction", fallback="all").strip().lower(),
         })
 
     return satellites
-
 
 def _parse_scheduling(p):
     return {
@@ -270,6 +270,24 @@ def _validate_config(cfg: Dict[str, Any]):
     for sat in active:
         if sat["frequency"] <= 0:
             raise ConfigError(f"Invalid frequency for {sat['name']}")
+
+    valid_directions = {
+        "all",
+        "north_to_south",
+        "south_to_north",
+        "west_to_east",
+        "east_to_west",
+        "southwest_to_northeast",
+        "southeast_to_northwest",
+        "northwest_to_southeast",
+        "northeast_to_southwest",
+    }
+
+    for sat in cfg["satellites"]:
+        if sat["pass_direction"] not in valid_directions:
+            raise ConfigError(
+                f"Invalid pass direction for {sat['name']}: {sat['pass_direction']}"
+            )
 
     for key in [
         "base_dir",
