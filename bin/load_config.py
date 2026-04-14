@@ -44,7 +44,10 @@ def load_config(path: str) -> Dict[str, Any]:
     config["notify"] = _parse_notify(parser)
     config["systemd"] = _parse_systemd(parser)
     config["reception_setup"] = _parse_reception_setup(parser)
-    config["optimize_reception"] = _parse_optimize_reception(parser)
+    config["optimize_reception"] = _parse_optimize_reception(
+        parser,
+        config["paths"]["optimization_dir"],
+    )
     config["optimize_reception_ai"] = _parse_optimize_reception_ai(parser)
 
     _validate_config(config)
@@ -191,9 +194,14 @@ def _parse_reception_setup(p):
     }
 
 
-def _parse_optimize_reception(p):
+def _parse_optimize_reception(p, default_output_dir: str):
     return {
         "enabled": p.getboolean("optimize_reception", "enabled", fallback=False),
+        "output_dir": p.get(
+            "optimize_reception",
+            "output_dir",
+            fallback=default_output_dir,
+        ).strip(),
         "same_pass_direction_only": p.getboolean("optimize_reception", "same_pass_direction_only", fallback=True),
         "max_delta_aos_azimuth": p.getfloat("optimize_reception", "max_delta_aos_azimuth", fallback=20.0),
         "max_delta_los_azimuth": p.getfloat("optimize_reception", "max_delta_los_azimuth", fallback=20.0),
@@ -240,7 +248,13 @@ def _parse_optimize_reception_ai(p):
     return {
         "enabled": p.getboolean("optimize_reception_ai", "enabled", fallback=False),
         "max_passes": p.getint("optimize_reception_ai", "max_passes", fallback=25),
+        "provider": p.get(
+            "optimize_reception_ai",
+            "provider",
+            fallback="openai",
+        ).strip().lower(),
         "model": p.get("optimize_reception_ai", "model", fallback="gpt-5"),
+        "base_url": p.get("optimize_reception_ai", "base_url", fallback="").strip(),
         "include_optimizer_report": p.getboolean(
             "optimize_reception_ai",
             "include_optimizer_report",
@@ -250,6 +264,11 @@ def _parse_optimize_reception_ai(p):
             "optimize_reception_ai",
             "temperature",
             fallback=1.0,
+        ),
+        "request_timeout_seconds": p.getint(
+            "optimize_reception_ai",
+            "request_timeout_seconds",
+            fallback=120,
         ),
         "api_key": p.get("optimize_reception_ai", "api_key", fallback="").strip(),
     }
@@ -297,3 +316,9 @@ def _validate_config(cfg: Dict[str, Any]):
     python_bin = cfg["paths"]["python_bin"]
     if not os.path.exists(python_bin):
         raise ConfigError(f"Python binary not found: {python_bin}")
+
+    ai_provider = cfg["optimize_reception_ai"]["provider"]
+    if ai_provider not in {"openai", "ollama"}:
+        raise ConfigError(
+            "optimize_reception_ai.provider must be 'openai' or 'ollama'"
+        )
