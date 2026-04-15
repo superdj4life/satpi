@@ -1,22 +1,22 @@
-satpi
+# satpi
 
 Autonomous, config-driven weather satellite reception pipeline for Raspberry Pi.
 
 satpi is a headless workflow for automated weather satellite reception. It downloads and filters TLE data, predicts passes, generates per-pass systemd timers, runs SatDump for live reception, stores structured reception metadata, renders reception plots, imports pass metrics into SQLite, uploads successful results, and can send notification emails.
 
 Features
-	•	headless, autonomous workflow
-	•	config-driven setup
-	•	per-satellite configuration
-	•	Skyfield-based pass prediction
-	•	systemd-based scheduling
-	•	SatDump live reception and decode
-	•	structured reception.json output per pass
-	•	automatic skyplot and timechart rendering
-	•	SQLite-based reception database
-	•	reception analysis and optimization tools
-	•	optional upload via rclone
-	•	optional notification via msmtp
+ • headless, autonomous workflow
+ • config-driven setup
+ • per-satellite configuration
+ • Skyfield-based pass prediction
+ • systemd-based scheduling
+ • SatDump live reception and decode
+ • structured reception.json output per pass
+ • automatic skyplot and timechart rendering
+ • SQLite-based reception database
+ • reception analysis and optimization tools
+ • optional upload via rclone
+ • optional notification via msmtp
 
 Quick start
 
@@ -24,7 +24,7 @@ Clone the repository:
 
 sudo apt update
 sudo apt install -y git
-git clone https://github.com/HorvathAndreas/satpi.git
+git clone <https://github.com/HorvathAndreas/satpi.git>
 cd satpi
 
 Run the base installation script:
@@ -50,32 +50,32 @@ systemctl list-timers --all | grep satpi
 Requirements
 
 Hardware
-	•	Raspberry Pi 4 or Raspberry Pi 5
-	•	RTL-SDR compatible receiver
-	•	suitable antenna and RF setup for weather satellite reception
+ • Raspberry Pi 4 or Raspberry Pi 5
+ • RTL-SDR compatible receiver
+ • suitable antenna and RF setup for weather satellite reception
 
 Software
-	•	Raspberry Pi OS Lite 64-bit
-	•	Python 3
-	•	systemd
-	•	SatDump
-	•	python3-skyfield
-	•	python3-numpy
-	•	python3-matplotlib
-	•	sqlite3
-	•	rclone
-	•	msmtp
+ • Raspberry Pi OS Lite 64-bit
+ • Python 3
+ • systemd
+ • SatDump
+ • python3-skyfield
+ • python3-numpy
+ • python3-matplotlib
+ • sqlite3
+ • rclone
+ • msmtp
 
 Workflow
-	1.	update_tle.py
+ 1. update_tle.py
 Downloads fresh TLE data and filters it to the configured satellites.
-	2.	predict_passes.py
+ 2. predict_passes.py
 Calculates upcoming passes for the configured ground station.
-	3.	schedule_passes.py
+ 3. schedule_passes.py
 Generates per-pass systemd service and timer units for all relevant future passes.
-	4.	receive_pass.py
+ 4. receive_pass.py
 Executes one scheduled pass, starts SatDump, records structured reception data, imports metrics into SQLite, renders plots, decodes results, uploads output, and optionally sends a notification email.
-	5.	generate_refresh_units.py
+ 5. generate_refresh_units.py
 Creates the higher-level refresh service and timer that periodically updates the overall planning state of the system.
 
 Project structure
@@ -262,26 +262,26 @@ Before running satpi, at minimum you should review and adapt these settings in `
   - `api_key` for OpenAI, or optional auth in front of Ollama
 
 If you only want the basic reception pipeline first, the most important items are:
-	•	station and QTH
-	•	paths
-	•	hardware
-	•	satellite definitions
-	•	systemd service user
+ • station and QTH
+ • paths
+ • hardware
+ • satellite definitions
+ • systemd service user
 
 Path handling
 
 All local project paths are configured in the [paths] section.
 
 base_dir is the project root. Most project-specific paths in config.ini are stored relative to base_dir, for example:
-	•	results/passes/passes.json
-	•	results/captures
-	•	results/tle/weather.tle
-	•	results/database/reception.db
+ • results/passes/passes.json
+ • results/captures
+ • results/tle/weather.tle
+ • results/database/reception.db
 
 System binaries remain absolute paths:
-	•	satdump_bin
-	•	mail_bin
-	•	python_bin
+ • satdump_bin
+ • mail_bin
+ • python_bin
 
 Installation notes
 
@@ -332,13 +332,13 @@ Generate the refresh units:
 python3 bin/generate_refresh_units.py
 
 This creates and links:
-	•	satpi-refresh.service
-	•	satpi-refresh.timer
+ • satpi-refresh.service
+ • satpi-refresh.timer
 
 The refresh timer runs the planning chain:
-	1.	update TLE
-	2.	predict passes
-	3.	schedule pass timers
+ 1. update TLE
+ 2. predict passes
+ 3. schedule pass timers
 
 Check the result:
 
@@ -408,17 +408,17 @@ results/captures/
 
 Each pass gets its own directory, for example:
 
-results/captures/2026-04-10_16-07-30_METEOR-M2_4/
+results/captures/YYYY-MM-DD_HH-MM-SS_SATAME_01/
 
 A pass directory may contain:
-	•	reception.json
-	•	skyplot_<pass_id>.png
-	•	timeseries_<pass_id>.png
-	•	.cadu
-	•	decoded image products
-	•	MSU-MR/
-	•	dataset.json
-	•	telemetry.json
+ • reception.json
+ • skyplot_<pass_id>.png
+ • timeseries_<pass_id>.png
+ • .cadu
+ • decoded image products
+ • MSU-MR/
+ • dataset.json
+ • telemetry.json
 
 Planning results
 
@@ -427,7 +427,7 @@ Prediction and planning artifacts are written to:
 results/passes/
 
 This directory is intended only for planning-related files such as:
-	•	passes.json
+ • passes.json
 
 Database
 
@@ -442,9 +442,9 @@ Combined plots and reports are written to:
 results/reports/
 
 Typical examples:
-	•	skyplot_METEOR-M2_4.png
-	•	skyplot_METEOR-M2_4_and_others.png
-	•	skyplot_filtered.png
+ • skyplot_METEOR-M2_4.png
+ • skyplot_METEOR-M2_4_and_others.png
+ • skyplot_filtered.png
 
 Optimization output
 
@@ -463,16 +463,16 @@ Structured reception data
 For every recorded pass, receive_pass.py writes a reception.json file into the pass directory under results/captures/.
 
 This file contains:
-	•	pass identifiers and timing
-	•	RF settings
-	•	reception setup metadata
-	•	time-stamped SNR / BER / sync-state samples
-	•	azimuth and elevation samples
+ • pass identifiers and timing
+ • RF settings
+ • reception setup metadata
+ • time-stamped SNR / BER / sync-state samples
+ • azimuth and elevation samples
 
 This JSON file is the basis for:
-	•	database import
-	•	traceable per-pass metadata storage
-	•	later re-import if needed
+ • database import
+ • traceable per-pass metadata storage
+ • later re-import if needed
 
 Plots themselves are generated from the SQLite database, not directly from the JSON files.
 
@@ -483,8 +483,8 @@ plot_receptions.py uses the SQLite database as the source of truth.
 Single-pass mode
 
 If --pass-id is given, the script creates:
-	•	one skyplot
-	•	one timechart
+ • one skyplot
+ • one timechart
 
 for exactly that pass.
 
@@ -493,27 +493,27 @@ Combined mode
 If --pass-id is not given, the script creates one combined skyplot across all passes matching the selected filters.
 
 Filtering supports:
-	•	--satellite
-	•	reception setup fields such as:
-	•	--antenna-type
-	•	--antenna-location
-	•	--antenna-orientation
-	•	--lna
-	•	--rf-filter
-	•	--feedline
-	•	--sdr
-	•	--raspberry-pi
-	•	--power-supply
-	•	--additional-info
+ • --satellite
+ • reception setup fields such as:
+ • --antenna-type
+ • --antenna-location
+ • --antenna-orientation
+ • --lna
+ • --rf-filter
+ • --feedline
+ • --sdr
+ • --raspberry-pi
+ • --power-supply
+ • --additional-info
 
 Repeated use of the same filter option works as OR within that parameter. Different parameters are combined as AND.
 
 Upload and notifications
 
 If enabled in config.ini, satpi can:
-	•	upload results via rclone
-	•	create a share link
-	•	send a notification email via msmtp
+ • upload results via rclone
+ • create a share link
+ • send a notification email via msmtp
 
 Documentation
 
@@ -526,10 +526,10 @@ Version
 Current documented release: v1.3.0
 
 Highlights of v1.3.0:
-	•	unified plotting in plot_receptions.py
-	•	single-pass plots now read from SQLite instead of directly from JSON
-	•	combined plots and single-pass plots use the same database-backed workflow
-	•	reception setup data now includes sdr in the database schema and import path
+ • unified plotting in plot_receptions.py
+ • single-pass plots now read from SQLite instead of directly from JSON
+ • combined plots and single-pass plots use the same database-backed workflow
+ • reception setup data now includes sdr in the database schema and import path
 
 Author
 

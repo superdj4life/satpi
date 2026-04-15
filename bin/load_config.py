@@ -49,6 +49,7 @@ def load_config(path: str) -> Dict[str, Any]:
         config["paths"]["optimization_dir"],
     )
     config["optimize_reception_ai"] = _parse_optimize_reception_ai(parser)
+    config["ha_mqtt"] = _parse_ha_mqtt(parser)
 
     _validate_config(config)
     return config
@@ -271,6 +272,24 @@ def _parse_optimize_reception_ai(p):
             fallback=120,
         ),
         "api_key": p.get("optimize_reception_ai", "api_key", fallback="").strip(),
+    }
+
+
+def _parse_ha_mqtt(p):
+    return {
+        "enabled": p.getboolean("ha_mqtt", "enabled", fallback=False),
+        "host": p.get("ha_mqtt", "host", fallback="homeassistant.local").strip(),
+        "port": p.getint("ha_mqtt", "port", fallback=1883),
+        "username": p.get("ha_mqtt", "username", fallback="").strip(),
+        "password": p.get("ha_mqtt", "password", fallback="").strip(),
+        "tls": p.getboolean("ha_mqtt", "tls", fallback=False),
+        "keepalive": p.getint("ha_mqtt", "keepalive", fallback=60),
+        "base_topic": p.get("ha_mqtt", "base_topic", fallback="satpi").strip().rstrip("/"),
+        "discovery_prefix": p.get("ha_mqtt", "discovery_prefix", fallback="homeassistant").strip().rstrip("/"),
+        "device_id": p.get("ha_mqtt", "device_id", fallback="satpi").strip(),
+        "device_name": p.get("ha_mqtt", "device_name", fallback="satpi").strip(),
+        "smb_host": p.get("ha_mqtt", "smb_host", fallback="").strip(),
+        "smb_skyplots_share": p.get("ha_mqtt", "smb_skyplots_share", fallback="skyplots").strip(),
     }
 
 
