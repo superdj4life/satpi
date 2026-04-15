@@ -58,6 +58,73 @@ def build_satellite_map(sat_objects):
 def load_satellites_from_tle(tle_file):
     return load.tle_file(tle_file)
 
+def azimuth_to_cardinal(az_deg):
+    az = az_deg % 360.0
+
+    if az >= 337.5 or az < 22.5:
+        return "north"
+    if az < 67.5:
+        return "northeast"
+    if az < 112.5:
+        return "east"
+    if az < 157.5:
+        return "southeast"
+    if az < 202.5:
+        return "south"
+    if az < 247.5:
+        return "southwest"
+    if az < 292.5:
+        return "west"
+    return "northwest"
+
+
+def derive_pass_direction(aos_azimuth_deg, los_azimuth_deg):
+    start_dir = azimuth_to_cardinal(aos_azimuth_deg)
+    end_dir = azimuth_to_cardinal(los_azimuth_deg)
+
+    allowed_directions = {
+        ("north", "south"): "north_to_south",
+        ("south", "north"): "south_to_north",
+        ("west", "east"): "west_to_east",
+        ("east", "west"): "east_to_west",
+        ("southwest", "northeast"): "southwest_to_northeast",
+        ("southeast", "northwest"): "southeast_to_northwest",
+        ("northwest", "southeast"): "northwest_to_southeast",
+        ("northeast", "southwest"): "northeast_to_southwest",
+    }
+
+    if (start_dir, end_dir) in allowed_directions:
+        return allowed_directions[(start_dir, end_dir)]
+
+    start_x = 1 if "east" in start_dir else -1 if "west" in start_dir else 0
+    start_y = 1 if "north" in start_dir else -1 if "south" in start_dir else 0
+    end_x = 1 if "east" in end_dir else -1 if "west" in end_dir else 0
+    end_y = 1 if "north" in end_dir else -1 if "south" in end_dir else 0
+
+    dx = end_x - start_x
+    dy = end_y - start_y
+
+    if abs(dx) > abs(dy):
+        return "west_to_east" if dx > 0 else "east_to_west"
+    if abs(dy) > abs(dx):
+        return "south_to_north" if dy > 0 else "north_to_south"
+
+    if dx > 0 and dy > 0:
+        return "southwest_to_northeast"
+    if dx < 0 and dy > 0:
+        return "southeast_to_northwest"
+    if dx > 0 and dy < 0:
+        return "northwest_to_southeast"
+    if dx < 0 and dy < 0:
+        return "northeast_to_southwest"
+
+    if dy > 0:
+        return "south_to_north"
+    if dy < 0:
+        return "north_to_south"
+    if dx > 0:
+        return "west_to_east"
+    return "east_to_west"
 
 def compute_passes_for_satellite(ts, observer, sat_obj, sat_cfg, start_dt, end_dt):
     t0 = ts.from_datetime(start_dt)
@@ -78,6 +145,10 @@ def compute_passes_for_satellite(ts, observer, sat_obj, sat_cfg, start_dt, end_d
     for t, event in zip(t_events, events):
         dt = t.utc_datetime().replace(tzinfo=timezone.utc)
 
+        difference = sat_obj - observer
+        topocentric = difference.at(t)
+        alt, az, distance = topocentric.altaz()
+
         if event == 0:
             current_pass = {
                 "satellite": sat_cfg["name"],
@@ -85,6 +156,9 @@ def compute_passes_for_satellite(ts, observer, sat_obj, sat_cfg, start_dt, end_d
                 "end": None,
                 "max_elevation": None,
                 "max_elevation_time": None,
+                "aos_azimuth_deg": round(az.degrees, 2),
+                "los_azimuth_deg": None,
+                "direction": None,
                 "frequency_hz": sat_cfg["frequency"],
                 "bandwidth_hz": sat_cfg["bandwidth"],
                 "pipeline": sat_cfg["pipeline"],
@@ -92,15 +166,17 @@ def compute_passes_for_satellite(ts, observer, sat_obj, sat_cfg, start_dt, end_d
 
         elif event == 1:
             if current_pass is not None:
-                difference = sat_obj - observer
-                topocentric = difference.at(t)
-                alt, az, distance = topocentric.altaz()
                 current_pass["max_elevation"] = round(alt.degrees, 2)
                 current_pass["max_elevation_time"] = dt
 
         elif event == 2:
             if current_pass is not None:
                 current_pass["end"] = dt
+                current_pass["los_azimuth_deg"] = round(az.degrees, 2)
+                current_pass["direction"] = derive_pass_direction(
+                    current_pass["aos_azimuth_deg"],
+                    current_pass["los_azimuth_deg"],
+                )
 
                 if (
                     current_pass["start"] is not None
@@ -114,6 +190,9 @@ def compute_passes_for_satellite(ts, observer, sat_obj, sat_cfg, start_dt, end_d
                         "end": isoformat_utc(current_pass["end"]),
                         "max_elevation": current_pass["max_elevation"],
                         "max_elevation_time": isoformat_utc(current_pass["max_elevation_time"]),
+                        "aos_azimuth_deg": current_pass["aos_azimuth_deg"],
+                        "los_azimuth_deg": current_pass["los_azimuth_deg"],
+                        "direction": current_pass["direction"],
                         "frequency_hz": current_pass["frequency_hz"],
                         "bandwidth_hz": current_pass["bandwidth_hz"],
                         "pipeline": current_pass["pipeline"],
@@ -122,7 +201,6 @@ def compute_passes_for_satellite(ts, observer, sat_obj, sat_cfg, start_dt, end_d
                 current_pass = None
 
     return passes
-
 
 def write_passes_json(pass_file, passes):
     os.makedirs(os.path.dirname(pass_file), exist_ok=True)

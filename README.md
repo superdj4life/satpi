@@ -1,104 +1,85 @@
-# satpi
+satpi
 
-Autonomous, config-driven satellite reception pipeline for Raspberry Pi.
+Autonomous, config-driven weather satellite reception pipeline for Raspberry Pi.
 
-`satpi` is a headless workflow for automated weather satellite reception. It downloads and filters TLE data, predicts passes, generates per-pass systemd timers, runs SatDump for live reception, stores structured reception metadata, renders reception plots, imports pass metrics into SQLite, uploads successful results, and can send notification emails.
+satpi is a headless workflow for automated weather satellite reception. It downloads and filters TLE data, predicts passes, generates per-pass systemd timers, runs SatDump for live reception, stores structured reception metadata, renders reception plots, imports pass metrics into SQLite, uploads successful results, and can send notification emails.
 
-## Features
+Features
+	•	headless, autonomous workflow
+	•	config-driven setup
+	•	per-satellite configuration
+	•	Skyfield-based pass prediction
+	•	systemd-based scheduling
+	•	SatDump live reception and decode
+	•	structured reception.json output per pass
+	•	automatic skyplot and timechart rendering
+	•	SQLite-based reception database
+	•	reception analysis and optimization tools
+	•	optional upload via rclone
+	•	optional notification via msmtp
 
-- Headless, autonomous workflow
-- Config-driven setup
-- Per-satellite configuration
-- Skyfield-based pass prediction
-- systemd-based scheduling
-- SatDump live reception and decode
-- Structured `reception.json` output per pass
-- Automatic skyplot and time-series rendering
-- SQLite-based reception database
-- Reception analysis and optimization tools
-- Optional upload via `rclone`
-- Optional notification via `msmtp`
-
-## Quick start
+Quick start
 
 Clone the repository:
 
-```bash
 sudo apt update
 sudo apt install -y git
 git clone https://github.com/HorvathAndreas/satpi.git
 cd satpi
-```
 
 Run the base installation script:
 
-```bash
 bash scripts/install_base.sh
-```
 
 Copy the example configuration and create the active local config:
 
-```bash
 cp config/config.example.ini config/config.ini
 nano config/config.ini
-```
 
 Run the workflow manually once:
 
-```bash
 python3 bin/update_tle.py
 python3 bin/predict_passes.py
 python3 bin/schedule_passes.py
 python3 bin/generate_refresh_units.py
-```
 
 Check active timers:
 
-```bash
 systemctl list-timers --all | grep satpi
-```
 
-## Requirements
+Requirements
 
-### Hardware
+Hardware
+	•	Raspberry Pi 4 or Raspberry Pi 5
+	•	RTL-SDR compatible receiver
+	•	suitable antenna and RF setup for weather satellite reception
 
-- Raspberry Pi 4 or Raspberry Pi 5
-- RTL-SDR compatible receiver
-- Suitable antenna and RF setup for weather satellite reception
+Software
+	•	Raspberry Pi OS Lite 64-bit
+	•	Python 3
+	•	systemd
+	•	SatDump
+	•	python3-skyfield
+	•	python3-numpy
+	•	python3-matplotlib
+	•	sqlite3
+	•	rclone
+	•	msmtp
 
-### Software
+Workflow
+	1.	update_tle.py
+Downloads fresh TLE data and filters it to the configured satellites.
+	2.	predict_passes.py
+Calculates upcoming passes for the configured ground station.
+	3.	schedule_passes.py
+Generates per-pass systemd service and timer units for all relevant future passes.
+	4.	receive_pass.py
+Executes one scheduled pass, starts SatDump, records structured reception data, imports metrics into SQLite, renders plots, decodes results, uploads output, and optionally sends a notification email.
+	5.	generate_refresh_units.py
+Creates the higher-level refresh service and timer that periodically updates the overall planning state of the system.
 
-- Raspberry Pi OS Lite 64-bit
-- Python 3
-- systemd
-- SatDump
-- `python3-skyfield`
-- `python3-numpy`
-- `python3-matplotlib`
-- `sqlite3`
-- `rclone`
-- `msmtp`
+Project structure
 
-## Workflow
-
-1. **`update_tle.py`**  
-   Downloads fresh TLE data and filters it to the configured satellites.
-
-2. **`predict_passes.py`**  
-   Calculates upcoming passes for the configured ground station.
-
-3. **`schedule_passes.py`**  
-   Generates per-pass systemd service and timer units for all relevant future passes.
-
-4. **`receive_pass.py`**  
-   Executes one scheduled pass, starts SatDump, records structured reception data, renders plots, imports metrics into SQLite, decodes results, uploads output, and optionally sends a notification email.
-
-5. **`generate_refresh_units.py`**  
-   Creates the higher-level refresh service and timer that periodically updates the overall planning state of the system.
-
-## Project structure
-
-```text
 satpi/
 ├── bin/
 │   ├── export_reception_report_pdf.py
@@ -108,7 +89,7 @@ satpi/
 │   ├── load_config.py
 │   ├── optimize_reception.py
 │   ├── optimize_reception_ai.py
-│   ├── plot_reception.py
+│   ├── plot_receptions.py
 │   ├── predict_passes.py
 │   ├── query_reception_db.py
 │   ├── receive_pass.py
@@ -135,9 +116,8 @@ satpi/
 │   ├── satpi-refresh.timer
 │   └── generated/
 └── README.md
-```
 
-## File overview
+File overview
 
 ### `bin/load_config.py`
 
@@ -157,11 +137,15 @@ Reads the predicted pass data and generates one systemd service and one systemd 
 
 ### `bin/receive_pass.py`
 
-Executes one scheduled pass from start to finish. It prepares the pass-specific output directory, starts SatDump, records structured reception data into `reception.json`, renders plots, imports metrics into SQLite, triggers decode, copies the results, and optionally sends a notification email.
+Executes one scheduled pass from start to finish. It prepares the pass-specific output directory, starts SatDump, records structured reception data into `reception.json`, imports metrics into SQLite, renders plots via `plot_receptions.py`, triggers decode, copies the results, and optionally sends a notification email.
 
-### `bin/plot_reception.py`
+### `bin/plot_receptions.py`
 
-Creates a skyplot and a reception time-series plot from `reception.json`.
+Creates plots directly from the SQLite reception database.
+
+- With `--pass-id`, it generates a single-pass skyplot and timechart
+- Without `--pass-id`, it generates a combined skyplot across all passes matching the selected filters
+- Filtering supports satellites and the reception setup fields stored in the database
 
 ### `bin/init_reception_db.py`
 
@@ -215,16 +199,14 @@ Systemd timer that periodically triggers `satpi-refresh.service`.
 
 Contains the generated per-pass systemd service and timer files created by `schedule_passes.py`.
 
-## Configuration
+Configuration
 
 Create the active configuration file from the example:
 
-```bash
 cp config/config.example.ini config/config.ini
 nano config/config.ini
-```
 
-### Minimum required adjustments
+Minimum required adjustments
 
 Before running satpi, at minimum you should review and adapt these settings in `config/config.ini`:
 
@@ -280,58 +262,48 @@ Before running satpi, at minimum you should review and adapt these settings in `
   - `api_key` for OpenAI, or optional auth in front of Ollama
 
 If you only want the basic reception pipeline first, the most important items are:
+	•	station and QTH
+	•	paths
+	•	hardware
+	•	satellite definitions
+	•	systemd service user
 
-- station and QTH
-- paths
-- hardware
-- satellite definitions
-- systemd service user
+Path handling
 
-## Path handling
+All local project paths are configured in the [paths] section.
 
-All local project paths are configured in the `[paths]` section.
-
-`base_dir` is the project root. Most project-specific paths in `config.ini` are stored relative to `base_dir`, for example:
-
-- `results/passes/passes.json`
-- `results/captures`
-- `results/tle/weather.tle`
-- `results/database/reception.db`
+base_dir is the project root. Most project-specific paths in config.ini are stored relative to base_dir, for example:
+	•	results/passes/passes.json
+	•	results/captures
+	•	results/tle/weather.tle
+	•	results/database/reception.db
 
 System binaries remain absolute paths:
+	•	satdump_bin
+	•	mail_bin
+	•	python_bin
 
-- `satdump_bin`
-- `mail_bin`
-- `python_bin`
-
-## Installation notes
+Installation notes
 
 The base installation script prepares the operating system and builds SatDump:
 
-```bash
 bash scripts/install_base.sh
-```
 
 After that, two manual integrations are typically still required.
 
-### Configure rclone
+Configure rclone
 
-```bash
 rclone config
-```
 
-### Configure msmtp
+Configure msmtp
 
 Create the mail configuration file:
 
-```bash
 nano ~/.msmtprc
 chmod 600 ~/.msmtprc
-```
 
 Example structure:
 
-```ini
 defaults
 auth           on
 tls            on
@@ -346,76 +318,73 @@ user YOUR_GMAIL_ADDRESS
 password YOUR_APP_PASSWORD
 
 account default : gmail
-```
 
 Test mail delivery:
 
-```bash
 printf "Subject: satpi test\n\nTest mail.\n" | /usr/bin/msmtp YOUR_GMAIL_ADDRESS
-```
 
-## systemd integration
+When the blue Configuring msmtp dialog appears during installation, choose No for AppArmor support.
+
+systemd integration
 
 Generate the refresh units:
 
-```bash
 python3 bin/generate_refresh_units.py
-```
 
 This creates and links:
-
-- `satpi-refresh.service`
-- `satpi-refresh.timer`
+	•	satpi-refresh.service
+	•	satpi-refresh.timer
 
 The refresh timer runs the planning chain:
-
-1. update TLE
-2. predict passes
-3. schedule pass timers
+	1.	update TLE
+	2.	predict passes
+	3.	schedule pass timers
 
 Check the result:
 
-```bash
 systemctl list-timers --all | grep satpi
-```
 
-## Typical usage
+Typical usage
 
 Update TLE data manually:
 
-```bash
 python3 bin/update_tle.py
-```
 
 Predict passes manually:
 
-```bash
 python3 bin/predict_passes.py
-```
 
 Generate per-pass timers manually:
 
-```bash
 python3 bin/schedule_passes.py
-```
 
 Generate refresh units manually:
 
-```bash
 python3 bin/generate_refresh_units.py
-```
+
+Import all reception JSON files into SQLite:
+
+python3 bin/import_reception_to_db.py --all
+
+Create a combined skyplot from all recorded passes:
+
+python3 bin/plot_receptions.py
+
+Create a combined skyplot for a specific satellite:
+
+python3 bin/plot_receptions.py --satellite "METEOR-M2 4"
+
+Create plots for one specific pass:
+
+python3 bin/plot_receptions.py --pass-id "2026-04-10_16-07-30_METEOR-M2_4"
 
 Run reception optimizer manually:
 
-```bash
 python3 bin/optimize_reception.py --config config/config.ini
-```
 
 Run AI-based optimizer analysis manually:
 
-```bash
 python3 bin/optimize_reception_ai.py --config config/config.ini
-```
 
 Example for a remote Ollama host in `config.ini`:
 
@@ -431,108 +400,143 @@ api_key =
 
 ## Output
 
-### Pass results
+Pass results
 
 Pass-specific reception results are written to:
 
-```text
 results/captures/
-```
 
 Each pass gets its own directory, for example:
 
-```text
 results/captures/2026-04-10_16-07-30_METEOR-M2_4/
-```
 
 A pass directory may contain:
+	•	reception.json
+	•	skyplot_<pass_id>.png
+	•	timeseries_<pass_id>.png
+	•	.cadu
+	•	decoded image products
+	•	MSU-MR/
+	•	dataset.json
+	•	telemetry.json
 
-- `reception.json`
-- `*-skyplot.png`
-- `*-timeseries.png`
-- `.cadu`
-- decoded image products
-- `MSU-MR/`
-- `dataset.json`
-- `telemetry.json`
-
-### Planning results
+Planning results
 
 Prediction and planning artifacts are written to:
 
-```text
 results/passes/
-```
 
 This directory is intended only for planning-related files such as:
+	•	passes.json
 
-- `passes.json`
-
-### Database
+Database
 
 Reception history and derived pass metrics are stored in:
 
-```text
 results/database/reception.db
-```
 
-### Optimization output
+Reports and combined plots
+
+Combined plots and reports are written to:
+
+results/reports/
+
+Typical examples:
+	•	skyplot_METEOR-M2_4.png
+	•	skyplot_METEOR-M2_4_and_others.png
+	•	skyplot_filtered.png
+
+Optimization output
 
 Optimizer reports are written to:
 
-```text
 results/optimization/
-```
 
-### Runtime logs
+Runtime logs
 
 General script logs are written to:
 
-```text
 logs/
-```
 
-## Structured reception data
+Structured reception data
 
-For every recorded pass, `receive_pass.py` writes a `reception.json` file into the pass directory under `results/captures/`.
+For every recorded pass, receive_pass.py writes a reception.json file into the pass directory under results/captures/.
 
 This file contains:
-
-- pass identifiers and timing
-- RF settings
-- reception setup metadata
-- time-stamped SNR / BER / sync-state samples
-- azimuth and elevation samples
+	•	pass identifiers and timing
+	•	RF settings
+	•	reception setup metadata
+	•	time-stamped SNR / BER / sync-state samples
+	•	azimuth and elevation samples
 
 This JSON file is the basis for:
+	•	database import
+	•	traceable per-pass metadata storage
+	•	later re-import if needed
 
-- plot generation
-- database import
-- optimizer analysis
-- later report generation
+Plots themselves are generated from the SQLite database, not directly from the JSON files.
 
-## Upload and notifications
+Plotting logic
 
-If enabled in `config.ini`, satpi can:
+plot_receptions.py uses the SQLite database as the source of truth.
 
-- upload results via `rclone`
-- create a share link
-- send a notification email via `msmtp`
+Single-pass mode
 
-## Documentation
+If --pass-id is given, the script creates:
+	•	one skyplot
+	•	one timechart
+
+for exactly that pass.
+
+Combined mode
+
+If --pass-id is not given, the script creates one combined skyplot across all passes matching the selected filters.
+
+Filtering supports:
+	•	--satellite
+	•	reception setup fields such as:
+	•	--antenna-type
+	•	--antenna-location
+	•	--antenna-orientation
+	•	--lna
+	•	--rf-filter
+	•	--feedline
+	•	--sdr
+	•	--raspberry-pi
+	•	--power-supply
+	•	--additional-info
+
+Repeated use of the same filter option works as OR within that parameter. Different parameters are combined as AND.
+
+Upload and notifications
+
+If enabled in config.ini, satpi can:
+	•	upload results via rclone
+	•	create a share link
+	•	send a notification email via msmtp
+
+Documentation
 
 Beginner-oriented setup notes are available here:
 
-```text
 docs/INSTALL_FOR_BEGINNERS.md
-```
 
-## Author
+Version
 
-Andreas Horvath  
-info[at]andreas-horvath.ch  
+Current documented release: v1.3.0
+
+Highlights of v1.3.0:
+	•	unified plotting in plot_receptions.py
+	•	single-pass plots now read from SQLite instead of directly from JSON
+	•	combined plots and single-pass plots use the same database-backed workflow
+	•	reception setup data now includes sdr in the database schema and import path
+
+Author
+
+Andreas Horvath
+info[at]andreas-horvath.ch
 WhatsApp: +41 79 249 57 12
 
-## Project
+Project
 
-Autonomous, config-driven satellite reception pipeline for Raspberry Pi
+Autonomous, config-driven weather satellite reception pipeline for Raspberry Pi

@@ -28,24 +28,17 @@ def parse_args():
     parser.add_argument(
         "input",
         nargs="?",
-        help="Path to one *-reception.json file. If omitted with --all, imports all files.",
+        help="Path to one reception.json file. If omitted with --all, imports all files.",
     )
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Import all *-reception.json files from results/passes",
-    )
-    parser.add_argument(
-        "--config",
-        default=None,
-        help="Path to config.ini (default: ../config/config.ini relative to this script)",
+        help="Import all reception.json files from results/captures",
     )
     return parser.parse_args()
 
 
-def get_config_path(cli_value: str | None) -> str:
-    if cli_value:
-        return os.path.abspath(cli_value)
+def get_config_path() -> str:
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base_dir, "config", "config.ini")
 
@@ -64,19 +57,14 @@ def load_json(path: str) -> dict[str, Any]:
         return json.load(f)
 
 
-def build_setup_payload(data: dict[str, Any]) -> dict[str, str]:
+def build_setup_payload(data: dict[str, Any], setup_keys: list[str]) -> dict[str, str]:
     s = data.get("reception_setup", {})
-    return {
-        "antenna_type": str(s.get("antenna_type", "")),
-        "antenna_location": str(s.get("antenna_location", "")),
-        "antenna_orientation": str(s.get("antenna_orientation", "")),
-        "lna": str(s.get("lna", "")),
-        "rf_filter": str(s.get("rf_filter", "")),
-        "feedline": str(s.get("feedline", "")),
-        "raspberry_pi": str(s.get("raspberry_pi", "")),
-        "power_supply": str(s.get("power_supply", "")),
-        "additional_info": str(s.get("additional_info", "")),
-    }
+    payload = {}
+
+    for key in setup_keys:
+        payload[key] = str(s.get(key, ""))
+
+    return payload
 
 
 def build_setup_key(setup: dict[str, str]) -> str:
@@ -84,8 +72,12 @@ def build_setup_key(setup: dict[str, str]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def get_or_create_setup_id(conn: sqlite3.Connection, data: dict[str, Any]) -> int:
-    setup = build_setup_payload(data)
+def get_or_create_setup_id(
+    conn: sqlite3.Connection,
+    data: dict[str, Any],
+    setup_keys: list[str],
+) -> int:
+    setup = build_setup_payload(data, setup_keys)
     setup_key = build_setup_key(setup)
 
     row = conn.execute(
@@ -95,25 +87,18 @@ def get_or_create_setup_id(conn: sqlite3.Connection, data: dict[str, Any]) -> in
     if row:
         return int(row[0])
 
+    insert_columns = ["setup_key"] + setup_keys
+    placeholders = ", ".join("?" for _ in insert_columns)
+    column_sql = ", ".join(insert_columns)
+    values = [setup_key] + [setup[key] for key in setup_keys]
+
     conn.execute(
-        """
+        f"""
         INSERT INTO setup (
-            setup_key, antenna_type, antenna_location, antenna_orientation,
-            lna, rf_filter, feedline, raspberry_pi, power_supply, additional_info
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            {column_sql}
+        ) VALUES ({placeholders})
         """,
-        (
-            setup_key,
-            setup["antenna_type"],
-            setup["antenna_location"],
-            setup["antenna_orientation"],
-            setup["lna"],
-            setup["rf_filter"],
-            setup["feedline"],
-            setup["raspberry_pi"],
-            setup["power_supply"],
-            setup["additional_info"],
-        ),
+        values,
     )
 
     row = conn.execute(
@@ -138,10 +123,10 @@ def compute_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "sample_count": 0,
             "visible_sample_count": 0,
-            "start_azimuth_deg": None,
-            "mid_azimuth_deg": None,
-            "end_azimuth_deg": None,
-            "max_elevation_deg": None,
+            "aos_azimuth_deg": None,
+            "culmination_azimuth_deg": None,
+            "los_azimuth_deg": None,
+            "culmination_elevation_deg": None,
             "direction": "unknown",
             "first_deframer_sync_delay_seconds": None,
             "total_deframer_synced_seconds": 0.0,
@@ -156,10 +141,24 @@ def compute_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
 
     sample_count = len(samples_sorted)
     visible_sample_count = len(visible)
-    start_azimuth_deg = float(visible[0]["azimuth_deg"]) if visible else None
-    mid_azimuth_deg = float(visible[len(visible) // 2]["azimuth_deg"]) if visible else None
-    end_azimuth_deg = float(visible[-1]["azimuth_deg"]) if visible else None
-    max_elevation_deg = max(float(s["elevation_deg"]) for s in samples_sorted)
+
+    aos_azimuth_deg = float(visible[0]["azimuth_deg"]) if visible else None
+    los_azimuth_deg = float(visible[-1]["azimuth_deg"]) if visible else None
+
+    culmination_sample = None
+    if samples_sorted:
+        culmination_sample = max(samples_sorted, key=lambda s: float(s["elevation_deg"]))
+
+    culmination_azimuth_deg = (
+        float(culmination_sample["azimuth_deg"])
+        if culmination_sample and culmination_sample.get("azimuth_deg") is not None
+        else None
+    )
+    culmination_elevation_deg = (
+        float(culmination_sample["elevation_deg"])
+        if culmination_sample and culmination_sample.get("elevation_deg") is not None
+        else None
+    )
 
     if len(visible) >= 2:
         direction = (
@@ -215,10 +214,10 @@ def compute_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "sample_count": sample_count,
         "visible_sample_count": visible_sample_count,
-        "start_azimuth_deg": start_azimuth_deg,
-        "mid_azimuth_deg": mid_azimuth_deg,
-        "end_azimuth_deg": end_azimuth_deg,
-        "max_elevation_deg": max_elevation_deg,
+        "aos_azimuth_deg": aos_azimuth_deg,
+        "culmination_azimuth_deg": culmination_azimuth_deg,
+        "los_azimuth_deg": los_azimuth_deg,
+        "culmination_elevation_deg": culmination_elevation_deg,
         "direction": direction,
         "first_deframer_sync_delay_seconds": first_sync_delay,
         "total_deframer_synced_seconds": total_deframer_synced_seconds,
@@ -229,9 +228,14 @@ def compute_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def upsert_pass(conn: sqlite3.Connection, source_file: str, data: dict[str, Any]) -> None:
+def upsert_pass(
+    conn: sqlite3.Connection,
+    source_file: str,
+    data: dict[str, Any],
+    setup_keys: list[str],
+) -> None:
     pass_id = str(data["pass_id"])
-    setup_id = get_or_create_setup_id(conn, data)
+    setup_id = get_or_create_setup_id(conn, data, setup_keys)
     samples = list(data.get("samples", []))
     metrics = compute_metrics(samples)
     imported_at = utc_now_iso()
@@ -246,7 +250,7 @@ def upsert_pass(conn: sqlite3.Connection, source_file: str, data: dict[str, Any]
             frequency_hz, bandwidth_hz, gain, source_id, bias_t,
             pass_start, pass_end, scheduled_start, scheduled_end,
             sample_count, visible_sample_count,
-            start_azimuth_deg, mid_azimuth_deg, end_azimuth_deg, max_elevation_deg,
+            aos_azimuth_deg, culmination_azimuth_deg, los_azimuth_deg, culmination_elevation_deg,
             direction, first_deframer_sync_delay_seconds, total_deframer_synced_seconds,
             sync_drop_count, median_snr_synced, median_ber_synced, peak_snr_db,
             imported_at
@@ -269,10 +273,10 @@ def upsert_pass(conn: sqlite3.Connection, source_file: str, data: dict[str, Any]
             str(data["scheduled_end"]),
             int(metrics["sample_count"]),
             int(metrics["visible_sample_count"]),
-            metrics["start_azimuth_deg"],
-            metrics["mid_azimuth_deg"],
-            metrics["end_azimuth_deg"],
-            metrics["max_elevation_deg"],
+            metrics["aos_azimuth_deg"],
+            metrics["culmination_azimuth_deg"],
+            metrics["los_azimuth_deg"],
+            metrics["culmination_elevation_deg"],
             metrics["direction"],
             metrics["first_deframer_sync_delay_seconds"],
             metrics["total_deframer_synced_seconds"],
@@ -312,10 +316,9 @@ def upsert_pass(conn: sqlite3.Connection, source_file: str, data: dict[str, Any]
         )
 
 
-def resolve_input_files(args, base_dir: str) -> list[str]:
+def resolve_input_files(args, captures_dir: str) -> list[str]:
     if args.all:
-        passes_dir = os.path.join(base_dir, "results", "passes")
-        return sorted(str(p) for p in Path(passes_dir).glob("*-reception.json"))
+        return sorted(str(p) for p in Path(captures_dir).glob("*/reception.json"))
 
     if args.input:
         return [os.path.abspath(args.input)]
@@ -325,7 +328,7 @@ def resolve_input_files(args, base_dir: str) -> list[str]:
 
 def main() -> int:
     args = parse_args()
-    config_path = get_config_path(args.config)
+    config_path = get_config_path()
 
     try:
         config = load_config(config_path)
@@ -333,13 +336,11 @@ def main() -> int:
         print(f"[import_reception_to_db] CONFIG ERROR: {e}")
         return 1
 
-    if not config["reception_db"]["enabled"]:
-        print("[import_reception_to_db] reception_db disabled in config")
-        return 0
+    db_path = str(config["paths"]["reception_db_file"])
+    captures_dir = str(config["paths"]["output_dir"])
+    setup_keys = list(config["reception_setup"].keys())
 
-    db_path = str(config["reception_db"]["db_path"])
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    input_files = resolve_input_files(args, base_dir)
+    input_files = resolve_input_files(args, captures_dir)
 
     if not input_files:
         print("[import_reception_to_db] no input files found")
@@ -355,7 +356,7 @@ def main() -> int:
                 continue
 
             data = load_json(path)
-            upsert_pass(conn, path, data)
+            upsert_pass(conn, path, data, setup_keys)
             imported += 1
             print(f"[import_reception_to_db] imported: {path}")
 

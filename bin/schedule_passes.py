@@ -75,6 +75,70 @@ def sanitize_name(value):
     value = re.sub(r"-+", "-", value).strip("-")
     return value
 
+def _normalize_direction_value(value):
+    if value is None:
+        return None
+
+    value = str(value).strip().lower()
+    value = value.replace("-", "_").replace(" ", "_")
+    return value
+
+
+def _azimuth_to_cardinal(azimuth_deg):
+    az = float(azimuth_deg) % 360.0
+
+    if az >= 337.5 or az < 22.5:
+        return "north"
+    if az < 67.5:
+        return "northeast"
+    if az < 112.5:
+        return "east"
+    if az < 157.5:
+        return "southeast"
+    if az < 202.5:
+        return "south"
+    if az < 247.5:
+        return "southwest"
+    if az < 292.5:
+        return "west"
+    return "northwest"
+
+
+def determine_pass_direction(pass_entry):
+    for key in ("direction", "pass_direction", "flight_direction"):
+        if key in pass_entry and pass_entry[key] not in (None, ""):
+            return _normalize_direction_value(pass_entry[key])
+
+    aos_az = None
+    los_az = None
+
+    for key in ("aos_azimuth_deg", "aos_azimuth", "start_azimuth_deg", "start_azimuth"):
+        if key in pass_entry:
+            aos_az = pass_entry[key]
+            break
+
+    for key in ("los_azimuth_deg", "los_azimuth", "end_azimuth_deg", "end_azimuth"):
+        if key in pass_entry:
+            los_az = pass_entry[key]
+            break
+
+    if aos_az is None or los_az is None:
+        return "all"
+
+    aos_cardinal = _azimuth_to_cardinal(aos_az)
+    los_cardinal = _azimuth_to_cardinal(los_az)
+    return f"{aos_cardinal}_to_{los_cardinal}"
+
+def pass_matches_direction_filter(pass_entry, satellite_cfg):
+    allowed = _normalize_direction_value(satellite_cfg.get("pass_direction", "all"))
+
+    pass_direction = determine_pass_direction(pass_entry)
+    pass_entry["direction"] = pass_direction
+
+    if allowed in (None, "", "all"):
+        return True
+
+    return pass_direction == allowed
 
 def load_passes(pass_file):
     if not os.path.exists(pass_file):
@@ -104,6 +168,33 @@ def build_scheduled_passes(passes, pre_start_seconds, post_stop_seconds):
 def future_passes_only(scheduled_passes, now):
     return [p for p in scheduled_passes if p["scheduled_end_dt"] > now]
 
+def filter_passes_by_satellite_direction(scheduled_passes, satellites_cfg):
+    satellites_by_name = {s["name"]: s for s in satellites_cfg}
+    filtered = []
+
+    for p in scheduled_passes:
+        satellite_name = p["satellite"]
+        sat_cfg = satellites_by_name.get(satellite_name)
+
+        if sat_cfg is None:
+            logger.warning("No satellite config found for pass satellite '%s' - skipping", satellite_name)
+            continue
+
+        if not sat_cfg.get("enabled", True):
+            continue
+
+        if pass_matches_direction_filter(p, sat_cfg):
+            filtered.append(p)
+        else:
+            logger.info(
+                "Skipping pass %s for %s due to direction filter (pass direction: %s, required: %s)",
+                p.get("start", "?"),
+                satellite_name,
+                determine_pass_direction(p),
+                sat_cfg.get("pass_direction", "all"),
+            )
+
+    return filtered
 
 def make_unit_base_name(pass_entry):
     sat = sanitize_name(pass_entry["satellite"])
@@ -118,7 +209,7 @@ def make_service_content(pass_entry, receiver_script, python_bin, base_dir, serv
     scheduled_end = isoformat_utc(pass_entry["scheduled_end_dt"])
 
     return f"""[Unit]
-Description=SATPI pass receiver for {pass_entry['satellite']} at {scheduled_start}
+Description=SATPI pass receiver for {pass_entry['satellite']} ({pass_entry.get('direction', 'unknown')}) at {scheduled_start}
 After=network-online.target
 Wants=network-online.target
 
@@ -131,7 +222,7 @@ ExecStart={python_bin} {receiver_script} '{pass_entry["satellite"]}' '{pass_entr
 
 def make_timer_content(service_name, pass_entry):
     return f"""[Unit]
-Description=SATPI timer for {pass_entry['satellite']} at {isoformat_utc(pass_entry['scheduled_start_dt'])}
+Description=SATPI timer for {pass_entry['satellite']} ({pass_entry.get('direction', 'unknown')}) at {isoformat_utc(pass_entry['scheduled_start_dt'])}
 
 [Timer]
 OnCalendar={systemd_time(pass_entry["scheduled_start_dt"])}
@@ -231,6 +322,12 @@ def main():
     logger.info("Loaded %d passes from %s", len(passes), pass_file)
 
     scheduled_passes = build_scheduled_passes(passes, pre_start_seconds, post_stop_seconds)
+
+    scheduled_passes = filter_passes_by_satellite_direction(
+        scheduled_passes,
+        config["satellites"],
+    )
+    logger.info("Keeping %d passes after satellite direction filtering", len(scheduled_passes))
 
     now = datetime.now(timezone.utc)
     future_passes = future_passes_only(scheduled_passes, now)

@@ -4,8 +4,9 @@
 
 import os
 import sqlite3
+
 from load_config import load_config, ConfigError
-DB_PATH = "/home/andreas/satpi/results/database/reception.db"
+
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -19,6 +20,7 @@ CREATE TABLE IF NOT EXISTS setup (
     lna TEXT,
     rf_filter TEXT,
     feedline TEXT,
+    sdr TEXT,
     raspberry_pi TEXT,
     power_supply TEXT,
     additional_info TEXT
@@ -41,10 +43,10 @@ CREATE TABLE IF NOT EXISTS pass_header (
     scheduled_end TEXT NOT NULL,
     sample_count INTEGER NOT NULL DEFAULT 0,
     visible_sample_count INTEGER NOT NULL DEFAULT 0,
-    start_azimuth_deg REAL,
-    mid_azimuth_deg REAL,
-    end_azimuth_deg REAL,
-    max_elevation_deg REAL,
+    aos_azimuth_deg REAL,
+    culmination_azimuth_deg REAL,
+    los_azimuth_deg REAL,
+    culmination_elevation_deg REAL,
     direction TEXT,
     first_deframer_sync_delay_seconds REAL,
     total_deframer_synced_seconds REAL,
@@ -85,11 +87,11 @@ CREATE INDEX IF NOT EXISTS idx_pass_header_pass_start
 CREATE INDEX IF NOT EXISTS idx_pass_header_gain
     ON pass_header(gain);
 
-CREATE INDEX IF NOT EXISTS idx_pass_header_max_elevation
-    ON pass_header(max_elevation_deg);
+CREATE INDEX IF NOT EXISTS idx_pass_header_culmination_elevation
+    ON pass_header(culmination_elevation_deg);
 
-CREATE INDEX IF NOT EXISTS idx_pass_header_mid_azimuth
-    ON pass_header(mid_azimuth_deg);
+CREATE INDEX IF NOT EXISTS idx_pass_header_culmination_azimuth
+    ON pass_header(culmination_azimuth_deg);
 
 CREATE INDEX IF NOT EXISTS idx_pass_header_direction
     ON pass_header(direction);
@@ -101,6 +103,7 @@ CREATE INDEX IF NOT EXISTS idx_pass_detail_timestamp
     ON pass_detail(timestamp);
 """
 
+
 def main() -> int:
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     config_path = os.path.join(base_dir, "config", "config.ini")
@@ -111,7 +114,7 @@ def main() -> int:
         print(f"[init_reception_db] CONFIG ERROR: {e}")
         return 1
 
-    db_path = config["reception_db"]["db_path"]
+    db_path = config["paths"]["reception_db_file"]
 
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
@@ -124,6 +127,7 @@ def main() -> int:
 
     print(f"[init_reception_db] initialized: {db_path}")
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
