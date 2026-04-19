@@ -43,23 +43,22 @@ def load_reception_json(path: Path) -> dict:
         return json.load(f)
 
 
-def find_latest_reception_json(base_dir: Path) -> Path:
-    passes_dir = base_dir / "results" / "passes"
+def find_latest_reception_json(config: dict) -> Path:
+    passes_dir = Path(config["paths"]["output_dir"])
 
     if not passes_dir.exists():
         raise FileNotFoundError(f"Passes directory not found: {passes_dir}")
 
-    files = sorted(
-        passes_dir.glob("*-reception.json"),
+    json_files = sorted(
+        passes_dir.glob("*/reception.json"),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
 
-    if not files:
+    if not json_files:
         raise FileNotFoundError(f"No reception JSON files found in: {passes_dir}")
 
-    return files[0]
-
+    return json_files[0]
 
 def reduce_payload(data: dict, max_samples: int) -> dict:
     reduced = dict(data)
@@ -146,11 +145,11 @@ def main():
         return 1
 
     model = args.model or ai_cfg["model"] or DEFAULT_MODEL
-    output_file = Path(ai_cfg["output_file"])
+    output_file = Path(config["paths"]["optimization_ai_report_file"])
     include_optimizer_report = ai_cfg["include_optimizer_report"]
 
     try:
-        reception_path = find_latest_reception_json(base_dir)
+        reception_path = find_latest_reception_json(config)
     except FileNotFoundError as e:
         print(f"[ERROR] {e}")
         return 1

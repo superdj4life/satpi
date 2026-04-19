@@ -254,7 +254,6 @@ def _parse_optimize_reception_ai(p):
         "api_key": p.get("optimize_reception_ai", "api_key", fallback="").strip(),
     }
 
-
 # ==============================
 # VALIDATION
 # ==============================

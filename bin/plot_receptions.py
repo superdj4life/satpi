@@ -93,6 +93,13 @@ def build_parser(config) -> argparse.ArgumentParser:
         help="Plot exactly this pass_id as single-pass plots",
     )
     parser.add_argument(
+        "--pass-id-list",
+        action="append",
+        default=None,
+        help="Plot multiple pass_ids as one combined skyplot. Repeat option or use comma-separated values",
+    )
+
+    parser.add_argument(
         "--satellite",
         action="append",
         default=None,
@@ -132,6 +139,8 @@ def build_header_filters(args, setup_keys):
 
     return filters
 
+def build_pass_id_list(args):
+    return normalize_multi_values(args.pass_id_list)
 
 def apply_header_filters(sql: str, params: list, filters: dict) -> tuple[str, list]:
     column_map = {
@@ -260,6 +269,46 @@ def load_all_samples(conn: sqlite3.Connection, filters: dict):
     WHERE 1=1
     """
     params = []
+    sql, params = apply_header_filters(sql, params, filters)
+    sql += " ORDER BY h.satellite, h.pass_id, d.timestamp"
+
+    return conn.execute(sql, params).fetchall()
+
+def load_samples_for_pass_ids(conn: sqlite3.Connection, pass_ids: list[str], filters: dict):
+    if not pass_ids:
+        return []
+
+    placeholders = ",".join("?" for _ in pass_ids)
+
+    sql = f"""
+    SELECT
+        h.pass_id,
+        h.satellite,
+        h.pipeline,
+        d.timestamp,
+        d.snr_db,
+        d.peak_snr_db,
+        d.ber,
+        d.viterbi_state,
+        d.deframer_state,
+        d.azimuth_deg,
+        d.elevation_deg,
+        s.antenna_type,
+        s.antenna_location,
+        s.antenna_orientation,
+        s.lna,
+        s.rf_filter,
+        s.feedline,
+        s.sdr,
+        s.raspberry_pi,
+        s.power_supply,
+        s.additional_info
+    FROM pass_detail d
+    JOIN pass_header h ON h.pass_id = d.pass_id
+    JOIN setup s ON h.setup_id = s.setup_id
+    WHERE h.pass_id IN ({placeholders})
+    """
+    params = list(pass_ids)
     sql, params = apply_header_filters(sql, params, filters)
     sql += " ORDER BY h.satellite, h.pass_id, d.timestamp"
 
@@ -864,6 +913,7 @@ def main():
     captures_dir = config["paths"]["output_dir"]
 
     filters = build_header_filters(args, config["reception_setup"].keys())
+    pass_id_list = build_pass_id_list(args)
 
     conn = open_db(db_path)
     try:
@@ -888,11 +938,43 @@ def main():
             skyplot_path = os.path.join(single_output_dir, f"skyplot_{header_row['pass_id']}.png")
             timeseries_path = os.path.join(single_output_dir, f"timeseries_{header_row['pass_id']}.png")
 
-            plot_skyplot(data, samples, skyplot_path)
-            plot_timeseries(data, samples, timeseries_path)
+            skyplot_ok = False
+            timeseries_ok = False
 
-            print(f"Created: {skyplot_path}")
-            print(f"Created: {timeseries_path}")
+            try:
+                plot_skyplot(data, samples, skyplot_path)
+                print(f"Created: {skyplot_path}")
+                skyplot_ok = True
+            except Exception as e:
+                print(f"Skyplot skipped for {header_row['pass_id']}: {e}")
+
+            try:
+                plot_timeseries(data, samples, timeseries_path)
+                print(f"Created: {timeseries_path}")
+                timeseries_ok = True
+            except Exception as e:
+                print(f"Timeseries skipped for {header_row['pass_id']}: {e}")
+
+            if not skyplot_ok and not timeseries_ok:
+                raise SystemExit(f"No plots could be created for pass_id: {args.pass_id}")
+
+            return
+
+        if pass_id_list:
+            rows = load_samples_for_pass_ids(conn, pass_id_list, filters)
+            if not rows:
+                raise SystemExit("No matching rows found for pass_id_list")
+
+            pass_map = build_pass_map(rows)
+            usable_passes = {k: v for k, v in pass_map.items() if len(v) >= 2}
+            if not usable_passes:
+                raise SystemExit("No usable passes after filtering")
+
+            output_filename = "skyplot_grouped_passes.png"
+            output_path = os.path.join(reports_dir, output_filename)
+
+            draw_combined_plot(usable_passes, output_path)
+            print(f"Created: {output_path}")
             return
 
         rows = load_all_samples(conn, filters)
