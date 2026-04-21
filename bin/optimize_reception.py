@@ -69,7 +69,7 @@ def get_config_path(cli_value: str | None) -> str:
     return os.path.join(base_dir, "config", "config.ini")
 
 def load_optimizer_settings(config_path: str) -> dict[str, Any]:
-    p = configparser.ConfigParser()
+    p = configparser.ConfigParser(inline_comment_prefixes=(';', '#'))
     p.read(config_path, encoding="utf-8")
 
     if not p.has_section("optimize_reception"):
