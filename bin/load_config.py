@@ -50,6 +50,10 @@ def load_config(path: str) -> Dict[str, Any]:
     )
     config["optimize_reception_ai"] = _parse_optimize_reception_ai(parser)
     config["ha_mqtt"] = _parse_ha_mqtt(parser)
+    config["reception_db"] = {
+        "enabled": True,
+        "db_path": config["paths"]["reception_db_file"],
+    }
 
     _validate_config(config)
     return config
