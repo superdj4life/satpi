@@ -18,7 +18,7 @@ import subprocess
 from pathlib import Path
 import socket
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from skyfield.api import load, wgs84, EarthSatellite
 
@@ -36,6 +36,11 @@ SNR_LINE_RE = re.compile(
 SYNC_LINE_RE = re.compile(
     r"^\[(?P<time>\d{2}:\d{2}:\d{2}) - (?P<date>\d{2}/\d{2}/\d{4})\].*?"
     r"Viterbi : (?P<viterbi>[A-Z0-9_]+)\s+BER : (?P<ber>[0-9.]+),\s+Deframer : (?P<deframer>[A-Z0-9_]+)"
+)
+
+PROGRESS_LINE_RE = re.compile(
+    r"^\[(?P<time>\d{2}:\d{2}:\d{2}) - (?P<date>\d{2}/\d{2}/\d{4})\].*?"
+    r"Progress (?P<progress>(?:inf|[0-9.]+))%"
 )
 
 _TS = load.timescale()
@@ -360,7 +365,6 @@ def parse_satdump_snr_line(line: str):
         "peak_snr_db": float(m.group("peak")),
     }
 
-
 def parse_satdump_sync_line(line: str):
     m = SYNC_LINE_RE.search(line)
     if not m:
@@ -371,6 +375,20 @@ def parse_satdump_sync_line(line: str):
         "ber": float(m.group("ber")),
         "viterbi_state": m.group("viterbi"),
         "deframer_state": m.group("deframer"),
+    }
+
+
+def parse_satdump_progress_line(line: str):
+    m = PROGRESS_LINE_RE.search(line)
+    if not m:
+        return None
+
+    raw = m.group("progress")
+    if raw == "inf":
+        return None
+
+    return {
+        "progress_percent": float(raw),
     }
 
 
@@ -410,13 +428,44 @@ def write_json_atomic(target_path: str, payload: dict):
     os.replace(tmp_path, target)
 
 
-def maybe_build_sample(config, current_radio_state: dict, sync_data: dict, satellite_name: str):
+def interpolate_pass_timestamp(pass_start_utc: str, pass_end_utc: str, progress_percent: float) -> str:
+    start_dt = parse_utc(pass_start_utc)
+    end_dt = parse_utc(pass_end_utc)
+
+    if progress_percent < 0:
+        progress_percent = 0.0
+    if progress_percent > 100:
+        progress_percent = 100.0
+
+    fraction = progress_percent / 100.0
+    sample_dt = start_dt + (end_dt - start_dt) * fraction
+    return sample_dt.isoformat().replace("+00:00", "Z")
+
+
+def uniquify_sample_timestamp(sample_timestamp: str, seen_timestamps: dict[str, int]) -> str:
+    count = seen_timestamps.get(sample_timestamp, 0)
+    seen_timestamps[sample_timestamp] = count + 1
+
+    if count == 0:
+        return sample_timestamp
+
+    dt = parse_utc(sample_timestamp) + timedelta(milliseconds=count)
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def maybe_build_sample(
+    config,
+    current_radio_state: dict,
+    sync_data: dict,
+    satellite_name: str,
+    sample_timestamp_override: str | None = None,
+):
     if current_radio_state.get("snr_db") is None:
         return None
     if current_radio_state.get("peak_snr_db") is None:
         return None
 
-    sample_timestamp = sync_data["timestamp"]
+    sample_timestamp = sample_timestamp_override or sync_data["timestamp"]
 
     azimuth_deg, elevation_deg = compute_az_el(config, sample_timestamp, satellite_name)
 
@@ -430,7 +479,6 @@ def maybe_build_sample(config, current_radio_state: dict, sync_data: dict, satel
         "azimuth_deg": azimuth_deg,
         "elevation_deg": elevation_deg,
     }
-
 
 def _load_satellites_from_tle_file(tle_path: str):
     mtime = os.path.getmtime(tle_path)
@@ -641,19 +689,20 @@ def main():
         logger.error("SatDump binary not found: %s", satdump_bin)
         return 1
 
+    reception_json_path = os.path.join(pass_output_dir, "reception.json")
+
+    reception_payload = build_reception_json_header(config, args, pass_id)
+    write_json_atomic(reception_json_path, reception_payload)
+
     cmd, live_pipeline = build_satdump_command(config, args, pass_output_dir)
 
     logger.info("using live pipeline=%s", live_pipeline)
 
     satdump_log_path = os.path.join(log_dir, f"{pass_id}-satdump.log")
-    reception_json_path = os.path.join(pass_output_dir, "reception.json")
 
     logger.info("satdump_log=%s", satdump_log_path)
     logger.info("reception_json=%s", reception_json_path)
     logger.info("running SatDump command: %s", " ".join(cmd))
-
-    reception_payload = build_reception_json_header(config, args, pass_id)
-    write_json_atomic(reception_json_path, reception_payload)
 
     current_radio_state = {
         "snr_db": None,
@@ -693,6 +742,7 @@ def main():
                     if sample is not None:
                         reception_payload["samples"].append(sample)
                         write_json_atomic(reception_json_path, reception_payload)
+                        logger.info("reception_json samples count=%s", len(reception_payload["samples"]))
 
             return_code = process.poll()
             if return_code is not None:
@@ -748,7 +798,6 @@ def main():
     logger.info("receive_pass.py finished successfully")
 
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

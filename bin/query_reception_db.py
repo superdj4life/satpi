@@ -131,7 +131,7 @@ def query_latest(conn: sqlite3.Connection, limit: int, satellite: str | None, sh
             h.satellite,
             h.pass_start,
             h.gain,
-            h.max_elevation_deg,
+            h.culmination_elevation_deg,
             h.total_deframer_synced_seconds,
             h.median_snr_synced,
             h.median_ber_synced
@@ -307,11 +307,7 @@ def main() -> int:
         print(f"[query_reception_db] CONFIG ERROR: {e}")
         return 1
 
-    if not config["reception_db"]["enabled"]:
-        print("[query_reception_db] reception_db disabled in config")
-        return 1
-
-    db_path = config["reception_db"]["db_path"]
+    db_path = config["paths"]["reception_db_file"]
 
     if not os.path.exists(db_path):
         print(f"[query_reception_db] database not found: {db_path}")
