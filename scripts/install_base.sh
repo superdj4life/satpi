@@ -10,6 +10,8 @@
 
 set -euo pipefail
 
+export DEBIAN_FRONTEND=noninteractive
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SATPI_DIR="${REPO_DIR}"
 CONFIG_DIR="${SATPI_DIR}/config"
@@ -83,8 +85,8 @@ section "CONFIGURE LOCALE"
 
 SATPI_LOCALE="en_GB.UTF-8"
 
-if locale -a 2>/dev/null | grep -qi '^en_GB\.utf-?8$'; then
-    info "${SATPI_LOCALE} already exists. Skipping locale configuration."
+if locale -a 2>/dev/null | grep -qiE '^en_(GB|US)\.utf-?8$'; then
+    info "A compatible UTF-8 locale is already installed. Skipping locale configuration."
 else
     sudo sed -i 's/^# *en_GB.UTF-8 UTF-8/en_GB.UTF-8 UTF-8/' /etc/locale.gen
     sudo locale-gen "${SATPI_LOCALE}"
