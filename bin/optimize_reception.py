@@ -508,8 +508,6 @@ def load_reception_samples_for_pass(m: PassMetrics) -> list[dict[str, Any]]:
         return []
 
 
-    base_dir = Path(__file__).resolve().parent.parent
-
 def make_group_skyplot(
     group_id: int,
     items: list[PassMetrics],
