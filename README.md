@@ -67,6 +67,7 @@ Software
  • msmtp
 
 Workflow
+
  1. update_tle.py
 Downloads fresh TLE data and filters it to the configured satellites.
  2. predict_passes.py
@@ -336,6 +337,7 @@ This creates and links:
  • satpi-refresh.timer
 
 The refresh timer runs the planning chain:
+
  1. update TLE
  2. predict passes
  3. schedule pass timers

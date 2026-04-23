@@ -183,44 +183,9 @@ section "BUILD SATDUMP HEADLESS"
 
 SATDUMP_BUILD_VERSION="1.2.3"
 
-detect_satdump_installation() {
-    local candidate resolved
-    local -a candidates=()
-    local -A seen=()
-
-    if command -v satdump >/dev/null 2>&1; then
-        candidates+=("$(command -v satdump)")
-    fi
-
-    for candidate in \
-        /usr/bin/satdump \
-        /usr/local/bin/satdump \
-        /opt/SatDump/bin/satdump \
-        /opt/satdump/bin/satdump
-    do
-        if [[ -x "$candidate" ]]; then
-            candidates+=("$candidate")
-        fi
-    done
-
-    SATDUMP_PATH=""
-
-    for candidate in "${candidates[@]}"; do
-        resolved="$(readlink -f "$candidate" 2>/dev/null || printf '%s\n' "$candidate")"
-        if [[ -n "${seen[$resolved]:-}" ]]; then
-            continue
-        fi
-        seen[$resolved]=1
-
-        SATDUMP_PATH="$candidate"
-        return 0
-    done
-
-    return 1
-}
-
+SATDUMP_PATH=""
 SATDUMP_INSTALLED=false
-if detect_satdump_installation; then
+if SATDUMP_PATH="$(which satdump 2>/dev/null)" && [[ -x "$SATDUMP_PATH" ]]; then
     info "SatDump detected at ${SATDUMP_PATH}. Skipping build."
     SATDUMP_INSTALLED=true
 fi
@@ -277,7 +242,7 @@ for cmd in python3 git curl jq rclone msmtp cmake; do
     fi
 done
 
-if detect_satdump_installation; then
+if [[ "$SATDUMP_INSTALLED" == true ]]; then
     echo "[OK] satdump -> ${SATDUMP_PATH}"
 else
     echo "[MISSING] satdump"
