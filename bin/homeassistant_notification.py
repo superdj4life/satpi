@@ -276,43 +276,29 @@ def _register_pass_active_binary(client: mqtt.Client, cfg: dict) -> None:
 # SKYPLOT PATH RESOLUTION
 # ==============================
 
-def _smb_skyplot_path(cfg: dict, pass_id: str) -> str | None:
-    """
-    Build a UNC path to the skyplot PNG on the SMB share.
-    The share is \\<hostname>\skyplots and the file lives inside
-    the pass subdirectory: \\<hostname>\skyplots\<pass_id>\skyplot_<pass_id>.png
-    """
-    ha_cfg = cfg["ha_mqtt"]
-    smb_host = ha_cfg.get("smb_host", "").strip()
-    smb_share = ha_cfg.get("smb_skyplots_share", "skyplots").strip()
-
-    if not smb_host:
-        return None
-
-    return f"\\\\{smb_host}\\{smb_share}\\{pass_id}\\skyplot_{pass_id}.png"
-
-
-def _find_latest_skyplot(cfg: dict) -> tuple[str | None, str | None]:
-    """
-    Return (pass_id, smb_path) for the most recently modified skyplot PNG
-    found under the captures output directory.
-    """
-    output_dir = cfg["paths"]["output_dir"]
-
-    candidates = sorted(
-        Path(output_dir).rglob("*-skyplot.png"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-
-    if not candidates:
-        return None, None
-
-    latest = candidates[0]
-    # Directory name is the pass_id
-    pass_id = latest.parent.name
-    smb_path = _smb_skyplot_path(cfg, pass_id)
-    return pass_id, smb_path
+# SMB file sharing disabled — revisit once core MQTT flow is working
+#
+# def _smb_skyplot_path(cfg: dict, pass_id: str) -> str | None:
+#     ha_cfg = cfg["ha_mqtt"]
+#     smb_host = ha_cfg.get("smb_host", "").strip()
+#     smb_share = ha_cfg.get("smb_skyplots_share", "skyplots").strip()
+#     if not smb_host:
+#         return None
+#     return f"\\\\{smb_host}\\{smb_share}\\{pass_id}\\skyplot_{pass_id}.png"
+#
+# def _find_latest_skyplot(cfg: dict) -> tuple[str | None, str | None]:
+#     output_dir = cfg["paths"]["output_dir"]
+#     candidates = sorted(
+#         Path(output_dir).rglob("*-skyplot.png"),
+#         key=lambda p: p.stat().st_mtime,
+#         reverse=True,
+#     )
+#     if not candidates:
+#         return None, None
+#     latest = candidates[0]
+#     pass_id = latest.parent.name
+#     smb_path = _smb_skyplot_path(cfg, pass_id)
+#     return pass_id, smb_path
 
 
 # ==============================
@@ -425,12 +411,6 @@ def cmd_pass_done(client: mqtt.Client, cfg: dict, args) -> None:
     now_local = datetime.now(tz)
     pass_id = args.pass_id or ""
 
-    # Resolve skyplot path
-    if pass_id:
-        smb_path = _smb_skyplot_path(cfg, pass_id)
-    else:
-        _, smb_path = _find_latest_skyplot(cfg)
-
     outcome = "success" if args.success else "no_sync"
 
     last_state = f"{args.satellite} — {outcome}"
@@ -440,14 +420,10 @@ def cmd_pass_done(client: mqtt.Client, cfg: dict, args) -> None:
         "completed_at": now_local.strftime("%Y-%m-%d %H:%M %Z"),
         "outcome": outcome,
         "decode_ok": args.success,
-        "skyplot": smb_path or "",
     }
 
     publish(client, cfg, _topic(cfg, "last_pass/state"), last_state, retain=True)
     publish(client, cfg, _topic(cfg, "last_pass/attributes"), last_attrs, retain=True)
-
-    if smb_path:
-        publish(client, cfg, _topic(cfg, "last_skyplot/state"), smb_path, retain=True)
 
     # Clear the active-pass indicator
     publish(client, cfg, _topic(cfg, "active_pass/state"), "idle", retain=True)
