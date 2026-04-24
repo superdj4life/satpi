@@ -156,6 +156,28 @@ def register_all(client: mqtt.Client, cfg: dict) -> None:
     logger.info("All discovery messages published")
 
 
+def _register_pass_alarm(client: mqtt.Client, cfg: dict, slot: int, satellite: str, pass_start_utc: str) -> None:
+    """Register a timestamp sensor for a single upcoming pass slot (used as an HA alarm trigger)."""
+    object_id = f"pass_alarm_{slot:02d}"
+    topic = _discovery_topic(cfg, "sensor", object_id)
+    state_topic = _topic(cfg, f"pass_alarms/{object_id}/state")
+    payload = _discovery_config(cfg, "sensor", object_id, {
+        "name": f"satpi Pass Alarm {slot:02d}",
+        "state_topic": state_topic,
+        "device_class": "timestamp",
+        "icon": "mdi:alarm",
+        "json_attributes_topic": _topic(cfg, f"pass_alarms/{object_id}/attributes"),
+    })
+    publish(client, cfg, topic, payload, retain=True)
+    publish(client, cfg, state_topic, pass_start_utc, retain=True)
+    publish(
+        client, cfg,
+        _topic(cfg, f"pass_alarms/{object_id}/attributes"),
+        {"satellite": satellite, "slot": slot},
+        retain=True,
+    )
+
+
 def _discovery_config(cfg: dict, component: str, object_id: str, payload: dict) -> None:
     # Inject shared device block and unique_id into every discovery message
     payload["device"] = _device_payload(cfg)
@@ -360,6 +382,11 @@ def cmd_scheduled(client: mqtt.Client, cfg: dict, args) -> None:
     schedule_attrs = {"passes": upcoming[:args.max_passes]}
     publish(client, cfg, _topic(cfg, "schedule/state"), schedule_state, retain=True)
     publish(client, cfg, _topic(cfg, "schedule/attributes"), schedule_attrs, retain=True)
+
+    # Publish one timestamp alarm sensor per upcoming pass (for HA automations)
+    future_passes = [p for p in passes if datetime.fromisoformat(p["start"].replace("Z", "+00:00")) > now_utc]
+    for slot, p in enumerate(future_passes[:args.max_passes]):
+        _register_pass_alarm(client, cfg, slot, p["satellite"], p["start"])
 
     logger.info("Published schedule: %d upcoming passes", len(upcoming))
 

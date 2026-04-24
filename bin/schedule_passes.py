@@ -291,6 +291,18 @@ def link_and_enable_units(created_units):
         run(["sudo", "systemctl", "enable", "--now", timer_name])
 
 
+def _notify_ha_scheduled(config: dict, base_dir: str) -> None:
+    ha_script = os.path.join(base_dir, "bin", "homeassistant_notification.py")
+    python_bin = config["paths"]["python_bin"]
+    config_path = os.path.join(base_dir, "config", "config.ini")
+    cmd = [python_bin, ha_script, "--config", config_path, "scheduled"]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.warning("HA MQTT notification failed: %s", result.stderr.strip())
+    else:
+        logger.info("HA MQTT schedule published")
+
+
 def main():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     config_path = os.path.join(base_dir, "config", "config.ini")
@@ -338,6 +350,8 @@ def main():
     if not future_passes:
         logger.info("No future passes to schedule")
         run(["sudo", "systemctl", "daemon-reload"])
+        if config["ha_mqtt"]["enabled"]:
+            _notify_ha_scheduled(config, base_dir)
         return
 
     created_units = create_units(
@@ -353,6 +367,9 @@ def main():
 
     link_and_enable_units(created_units)
     logger.info("Scheduling complete")
+
+    if config["ha_mqtt"]["enabled"]:
+        _notify_ha_scheduled(config, base_dir)
 
 
 if __name__ == "__main__":
