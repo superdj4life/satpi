@@ -105,9 +105,10 @@ def connect(client: mqtt.Client, cfg: dict) -> None:
     client.loop_start()
 
 
-def disconnect(client: mqtt.Client, cfg: dict) -> None:
-    # Publish clean online status before we go, then disconnect
-    publish(client, cfg, _lwt_topic(cfg), "offline", retain=True)
+def disconnect(client: mqtt.Client) -> None:
+    # Leave the retained "online" status in place — entities should remain
+    # available after this short-lived script exits. The LWT "offline" payload
+    # is only sent by the broker if the connection drops unexpectedly.
     time.sleep(0.3)
     client.loop_stop()
     client.disconnect()
@@ -565,7 +566,7 @@ def main() -> int:
         logger.error("Unexpected error: %s", e)
         return 1
     finally:
-        disconnect(client, cfg)
+        disconnect(client)
 
     return 0
 
