@@ -309,6 +309,12 @@ def _register_pass_active_binary(client: mqtt.Client, cfg: dict) -> None:
 def cmd_register(client: mqtt.Client, cfg: dict, _args) -> None:
     register_all(client, cfg)
     publish(client, cfg, _lwt_topic(cfg), "online", retain=True)
+    # Publish initial idle states so HA shows a value rather than "Unknown"
+    publish(client, cfg, _topic(cfg, "active_pass/state"), "idle", retain=True)
+    publish(client, cfg, _topic(cfg, "active_pass/attributes"), {}, retain=True)
+    publish(client, cfg, _topic(cfg, "pass_active/state"), "OFF", retain=True)
+    publish(client, cfg, _topic(cfg, "last_pass/state"), "none", retain=True)
+    publish(client, cfg, _topic(cfg, "last_pass/attributes"), {}, retain=True)
 
 
 # ==============================
