@@ -171,6 +171,48 @@ sudo udevadm trigger
 
 press_enter
 
+section "CONFIGURE USB POWER (PI 4 — 1.2 A PER PORT)"
+
+cat <<'EOT_INFO'
+On Raspberry Pi 4, each USB port is limited to 600 mA by default. RTL-SDR
+dongles (especially TCXO models like the Nooelec SMArTee XTR) can draw
+more than that under load and may disconnect from the bus mid-operation.
+
+Setting 'usb_max_current_enable=1' raises the per-port limit to 1.2 A.
+Requires a 5V / 3A or better power supply for the Pi itself; with a
+weaker PSU the Pi may show undervoltage warnings instead.
+
+This setting has no effect on Raspberry Pi 5 (it is silently ignored).
+Takes effect after the next reboot.
+EOT_INFO
+
+# Detect which config.txt path applies (Bookworm uses /boot/firmware/, older
+# Pi OS releases use /boot/).
+PI_CONFIG_TXT=""
+for candidate in /boot/firmware/config.txt /boot/config.txt; do
+    if [[ -f "$candidate" ]]; then
+        PI_CONFIG_TXT="$candidate"
+        break
+    fi
+done
+
+if [[ -z "$PI_CONFIG_TXT" ]]; then
+    warn "Neither /boot/firmware/config.txt nor /boot/config.txt found; skipping."
+elif grep -qE '^[[:space:]]*usb_max_current_enable[[:space:]]*=' "$PI_CONFIG_TXT"; then
+    info "usb_max_current_enable already set in ${PI_CONFIG_TXT}; skipping."
+else
+    info "Adding 'usb_max_current_enable=1' to ${PI_CONFIG_TXT}"
+    sudo tee -a "$PI_CONFIG_TXT" >/dev/null <<'EOT_USBCFG'
+
+# satpi: enable 1.2 A USB current (Pi 4) so RTL-SDR dongles don't
+# disconnect under load. No effect on Pi 5.
+usb_max_current_enable=1
+EOT_USBCFG
+    info "Done. A reboot is required for this to take effect."
+fi
+
+press_enter
+
 section "PREPARE SOURCE DIRECTORY"
 
 sudo mkdir -p /usr/local/src
