@@ -65,7 +65,7 @@ KNOWN_KEYS: Dict[str, Set[str]] = {
         "power_supply", "additional_info",
     },
     "optimize_reception": {
-        "enabled",
+        "enabled", "same_pass_direction_only",
         "max_delta_aos_azimuth", "max_delta_los_azimuth",
         "max_delta_culmination_azimuth", "max_delta_culmination_elevation",
         "min_total_passes",
@@ -78,7 +78,15 @@ KNOWN_KEYS: Dict[str, Set[str]] = {
     },
     "optimize_reception_ai": {
         "enabled", "max_passes", "model", "include_optimizer_report",
-        "temperature", "api_key",
+        "temperature", "api_key", "provider", "base_url", "request_timeout_seconds",
+    },
+    "ha_mqtt": {
+        "enabled", "host", "port", "username", "password", "tls", "keepalive",
+        "base_topic", "discovery_prefix", "device_id", "device_name",
+        "smb_host", "smb_skyplots_share",
+    },
+    "iq_baseband_capture": {
+        "enabled", "format", "sample_rate", "keep_last_files",
     },
     "noise_floor": {
         "measurement_duration", "schedule_minute",
