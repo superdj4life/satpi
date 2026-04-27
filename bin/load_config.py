@@ -86,6 +86,9 @@ KNOWN_KEYS: Dict[str, Set[str]] = {
         "freq_start_mhz", "freq_end_mhz",
         "upload_enabled", "rclone_remote", "rclone_path", "create_link",
     },
+    "iq_baseband_capture": {
+        "enabled", "format", "sample_rate", "keep_last_files",
+    },
 }
 
 # Satellite section keys (dynamic section names)
