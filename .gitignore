@@ -19,3 +19,5 @@ results/database/
 testdata/
 *.log
 claude.md
+de421.bsp
+bin/output/
