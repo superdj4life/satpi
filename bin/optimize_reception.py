@@ -639,7 +639,6 @@ def setup_label(m: PassMetrics) -> str:
     return ", ".join(parts)
 
 
-<<<<<<< HEAD
 def direction_label_from_pass(group: list[PassMetrics]) -> str:
     aos = average([m.aos_azimuth_deg for m in group if m.aos_azimuth_deg is not None])
     los = average([m.los_azimuth_deg for m in group if m.los_azimuth_deg is not None])
@@ -694,9 +693,11 @@ def elevation_band_label(group: list[PassMetrics], settings: dict[str, Any]) -> 
         return f"high elevation ({int(limits[3])}-{int(limits[4])} degrees)"
     return f"very high elevation (>{int(limits[4])} degrees)"
 
+
 def group_title(group: list[PassMetrics], settings: dict[str, Any]) -> str:
     sat = group[0].satellite
     return f"{sat}, {direction_label_from_pass(group)}, {elevation_band_label(group, settings)}"
+
 
 def load_reception_samples_for_pass(m: PassMetrics) -> list[dict[str, Any]]:
     if not m.path:
@@ -721,9 +722,8 @@ def load_reception_samples_for_pass(m: PassMetrics) -> list[dict[str, Any]]:
     except Exception:
         return []
 
-=======
+
 # --- Skyplot subprocess ------------------------------------------------------
->>>>>>> upstream/main
 
 def make_group_skyplot(
     group_id: int,
