@@ -51,12 +51,14 @@ def git(args: list[str], cwd: Path, check=True) -> subprocess.CompletedProcess:
 
 
 def has_uncommitted_changes(repo: Path) -> bool:
-    result = git(["status", "--porcelain"], repo)
-    return bool(result.stdout.strip())
+    # Only tracked files — untracked files don't block a merge and gitignored
+    # files (like config.ini) are safe to leave in place.
+    result = git(["diff", "--quiet", "HEAD"], repo, check=False)
+    return result.returncode != 0
 
 
 def stash(repo: Path) -> bool:
-    result = git(["stash", "push", "--include-untracked", "-m", "update_satpi auto-stash"], repo)
+    result = git(["stash", "push", "-m", "update_satpi auto-stash"], repo)
     return "No local changes to save" not in result.stdout
 
 
