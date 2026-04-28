@@ -17,6 +17,7 @@ Features
  • reception analysis and optimization tools
  • optional upload via rclone
  • optional notification via msmtp
+ • optional mqtt homeassistant support
 
 Quick start
 
