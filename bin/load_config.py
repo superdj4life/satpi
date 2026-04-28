@@ -572,9 +572,9 @@ def _validate_config(cfg: Dict[str, Any], errors: List[str]) -> None:
         if not copytarget.get("rclone_path"):
             errors.append("copytarget.enabled=true but copytarget.rclone_path is missing")
 
-    # AI optimizer needs an API key when enabled.
+    # AI optimizer needs an API key when enabled, unless using Ollama (which doesn't require one).
     ai = cfg.get("optimize_reception_ai", {})
-    if ai.get("enabled") and not ai.get("api_key"):
+    if ai.get("enabled") and not ai.get("api_key") and ai.get("provider", "openai") != "ollama":
         errors.append(
             "optimize_reception_ai.enabled=true but no api_key is configured "
             "(set api_key in config, or SATPI_OPENAI_API_KEY / OPENAI_API_KEY env var)"
