@@ -258,11 +258,6 @@ def fmt(value: Any, digits: int = 2, none_value: str = "-") -> str:
         return str(value)
 
 
-<<<<<<< HEAD
-def load_optimizer_settings(config_path: str) -> dict[str, Any]:
-    p = configparser.ConfigParser(inline_comment_prefixes=(';', '#'))
-    p.read(config_path, encoding="utf-8")
-=======
 def fmt_int(value: Any, none_value: str = "-") -> str:
     if value is None:
         return none_value
@@ -270,7 +265,6 @@ def fmt_int(value: Any, none_value: str = "-") -> str:
         return str(int(round(float(value))))
     except (TypeError, ValueError):
         return str(value)
->>>>>>> upstream/main
 
 
 def average(values: Iterable[float]) -> float | None:
