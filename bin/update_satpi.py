@@ -36,7 +36,14 @@ def setup_logging(log_dir: Path | None):
 
 def run(cmd: list[str], cwd: Path, check=True) -> subprocess.CompletedProcess:
     logger.debug("Running: %s", " ".join(cmd))
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=check)
+    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    if result.stdout.strip():
+        logger.debug("stdout: %s", result.stdout.strip())
+    if result.stderr.strip():
+        (logger.debug if result.returncode == 0 else logger.error)("stderr: %s", result.stderr.strip())
+    if check and result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+    return result
 
 
 def git(args: list[str], cwd: Path, check=True) -> subprocess.CompletedProcess:
