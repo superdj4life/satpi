@@ -18,6 +18,6 @@ results/database/
 *.pyc
 testdata/
 *.log
-claude.md
+CLAUDE.md
 de421.bsp
 bin/output/
