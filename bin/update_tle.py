@@ -16,18 +16,25 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import sys
 import tempfile
 import time
+import argparse
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Iterable, List, Sequence, Set, Tuple
 
+import json
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from load_config import load_config, ConfigError
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
+from read_config import read_config, ConfigError
+
 
 
 # --- Constants ---------------------------------------------------------------
@@ -101,17 +108,70 @@ def check_url(url: str, timeout: Tuple[int, int] = (CONNECT_TIMEOUT, READ_TIMEOU
         return False
 
 
-def download_tle(url: str, target: str) -> None:
-    """Stream-download *url* into *target*. Raises RuntimeError on failure."""
+
+def download_tle_n2yo_multi(api_key: str, target: str, satellites: List[dict]) -> None:
+    """Download TLEs from N2YO API for multiple satellites and combine them."""
+    all_tle_lines = []
+
+    for sat in satellites:
+        if not sat.get("norad_id"):
+            logger.warning(f"Satellite '{sat['name']}' missing norad_id, skipping")
+            continue
+
+        norad_id = sat["norad_id"]
+        url = f"https://api.n2yo.com/rest/v1/satellite/tle/{norad_id}/?apiKey={api_key}"
+
+        try:
+            logger.info(f"Fetching TLE for {sat['name']} (NORAD {norad_id})")
+            with _build_session() as s, s.get(url, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT)) as r:
+                r.raise_for_status()
+                data = r.json()
+                if "tle" not in data:
+                    logger.warning(f"No TLE field for {sat['name']}")
+                    continue
+
+                tle_data = data["tle"]
+                all_tle_lines.append(sat["name"])
+                for line in tle_data.strip().split(chr(10)):
+                    all_tle_lines.append(line)
+        except (requests.RequestException, json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Failed to fetch TLE for {sat['name']}: {e}")
+            continue
+
+    if not all_tle_lines:
+        raise RuntimeError("No TLEs successfully downloaded from N2YO")
+
+    with open(target, "w") as f:
+        f.write("\n".join(all_tle_lines) + "\n")
+
+    if os.path.getsize(target) == 0:
+        raise RuntimeError("TLE file is empty")
+
+
+def download_tle(url: str, target: str, tle_format: str = "TXT") -> None:
+    """Download TLE data and save to target. Handles JSON and TXT formats."""
     try:
         with _build_session() as s, s.get(url, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT), stream=True) as r:
             r.raise_for_status()
-            with open(target, "wb") as f:
-                for chunk in r.iter_content(chunk_size=64 * 1024):
-                    if chunk:
-                        f.write(chunk)
+
+            if tle_format == "JSON":
+                # Parse JSON response and extract TLE field
+                data = r.json()
+                if "tle" not in data:
+                    raise RuntimeError("JSON response missing 'tle' field")
+                tle_data = data["tle"]
+                with open(target, "w") as f:
+                    f.write(tle_data)
+            else:
+                # Stream TXT format directly
+                with open(target, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=64 * 1024):
+                        if chunk:
+                            f.write(chunk)
     except requests.RequestException as e:
         raise RuntimeError(f"TLE download failed: {e}") from e
+    except (json.JSONDecodeError, KeyError) as e:
+        raise RuntimeError(f"TLE JSON parsing failed: {e}") from e
 
     if not os.path.exists(target) or os.path.getsize(target) == 0:
         raise RuntimeError("TLE download failed: empty file")
@@ -272,21 +332,85 @@ def _fallback_after_failure(tle_file: str) -> None:
     )
 
 
+def mirror_to_satdump(source_file: str) -> bool:
+    """Mirror our local TLE file into SatDump's expected location so SatDump
+    does not fall back to fetching from celestrak.org (which often blocks
+    the satpi IP). Atomic write via tmp + os.replace.
+
+    Non-fatal: warns on any error and returns False, never aborts the main
+    update flow.
+    """
+    target = Path.home() / ".config" / "satdump" / "satdump_tles.txt"
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = str(target) + ".tmp"
+        shutil.copyfile(source_file, tmp)
+        os.replace(tmp, str(target))
+        logger.info("Mirrored TLE to SatDump: %s", target)
+        return True
+    except OSError as e:
+        logger.warning("Could not mirror TLE to SatDump (%s): %s", target, e)
+        return False
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Download and filter TLE (Two-Line Element) orbital data for configured satellites",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+CONFIG.INI REQUIREMENTS:
+  [network]
+    - tle_url: URL of the TLE source (e.g., Celestrak or N2YO API endpoint)
+    - tle_format: Format of TLE data ('TXT' or 'JSON', default: 'TXT')
+    - api_key: (Optional) API key for N2YO service
+
+  [paths]
+    - tle_file: Output path for filtered TLE data (e.g., results/tle/weather.tle)
+    - log_dir: Directory for log files
+
+  [satellites]
+    - List of satellites with 'enabled' flag and 'norad_id' (for N2YO format)
+
+OUTPUT FILES:
+  - Primary TLE: {tle_file} (from config.ini)
+  - SatDump mirror: ~/.config/satdump/satdump_tles.txt (prevents SatDump from fetching from Celestrak)
+  - Log file: {log_dir}/update_tle.log
+
+BEHAVIOR:
+  - Downloads current TLE data from configured source
+  - Filters to include only configured satellites
+  - Falls back to existing local TLE if download fails (age < 5 days)
+  - Mirrors TLE to SatDump directory (non-fatal if it fails)
+  - Checks internet connectivity and Celestrak availability on failure
+        """
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
+    parse_args()  # Process --help / -h if requested
     base_dir = Path(__file__).resolve().parent.parent
     config_path = base_dir / "config" / "config.ini"
 
     try:
-        config = load_config(str(config_path))
+        config = read_config(str(config_path))
     except ConfigError as e:
         print(f"[update] CONFIG ERROR: {e}", file=sys.stderr)
         return 2
 
     setup_logging(config["paths"]["log_dir"])
+    # ... rest of function (unchanged)
 
     tle_url = config["network"]["tle_url"]
+    api_key = config["network"].get("api_key", "")
+    tle_format = config["network"].get("tle_format", "TXT").upper()
     tle_file = config["paths"]["tle_file"]
     satellites = [s for s in config["satellites"] if s["enabled"]]
+
+    # Append api_key to N2YO URL if available
+    if api_key and "n2yo.com" in tle_url:
+        separator = "&" if "?" in tle_url else "?"
+        tle_url = f"{tle_url}{separator}apiKey={api_key}"
 
     if not satellites:
         logger.error("No enabled satellites in config – nothing to do.")
@@ -300,19 +424,27 @@ def main() -> int:
     os.close(fd)
 
     try:
-        logger.info("Downloading TLE from %s", tle_url)
+        logger.info("Downloading TLE (format: %s)", tle_format)
         try:
-            download_tle(tle_url, tmp_file)
+            if tle_format == "JSON" and api_key:
+                # Use N2YO multi-satellite download
+                download_tle_n2yo_multi(api_key, tmp_file, satellites)
+            else:
+                # Use direct URL download (TXT format, typically Celestrak)
+                logger.info("Downloading from %s", tle_url)
+                download_tle(tle_url, tmp_file, tle_format)
 
             sat_names = [s["name"] for s in satellites]
             logger.info("Filtering satellites: %s", sat_names)
             filter_tle(tmp_file, tle_file, sat_names)
 
             logger.info("TLE update successful: %s", tle_file)
+            mirror_to_satdump(tle_file)
             return 0
 
         except RuntimeError:
             _fallback_after_failure(tle_file)
+            mirror_to_satdump(tle_file)
             return 0  # fallback accepted
 
     except Exception as e:

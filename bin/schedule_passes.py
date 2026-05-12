@@ -27,13 +27,16 @@ import os
 import re
 import subprocess
 import sys
+import argparse
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from load_config import load_config, ConfigError
-
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
+from read_config import read_config, ConfigError
 
 # --- Constants ---------------------------------------------------------------
 
@@ -120,9 +123,9 @@ def isoformat_utc(dt: datetime) -> str:
     )
 
 
-def systemd_time(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
+def systemd_time(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 def sanitize_name(value: str) -> str:
     value = value.upper().replace(" ", "-").replace("_", "-")
@@ -347,10 +350,11 @@ def write_file_atomic(path: str, content: str) -> None:
 # --- Cleanup / create / enable ----------------------------------------------
 
 def cleanup_existing_units(generated_units_dir: str) -> None:
-    services = sorted(glob.glob(os.path.join(generated_units_dir, "satpi-pass-*.service")))
-    timers = sorted(glob.glob(os.path.join(generated_units_dir, "satpi-pass-*.timer")))
+    # Find ALL satpi-pass-* units in /etc/systemd/system/, regardless of where their files are
+    systemd_units = sorted(glob.glob("/etc/systemd/system/satpi-pass-*.service")) + \
+                    sorted(glob.glob("/etc/systemd/system/satpi-pass-*.timer"))
 
-    unit_names = [os.path.basename(p) for p in services + timers]
+    unit_names = [os.path.basename(p) for p in systemd_units]
     active_skipped: List[str] = []
 
     for unit in unit_names:
@@ -366,23 +370,24 @@ def cleanup_existing_units(generated_units_dir: str) -> None:
         run(["sudo", "systemctl", "disable", "--now", unit], check=False)
         run(["sudo", "systemctl", "reset-failed", unit], check=False)
 
-    # Delete only the files we actually tore down.
-    for path in services + timers:
-        name = os.path.basename(path)
-        if name in active_skipped:
-            continue
-        sidecar = os.path.join(generated_units_dir, name.rsplit(".", 1)[0] + ".pass.json")
+    # Unlink any stale symlinks from /etc/systemd/system/
+    for unit_file in systemd_units:
+        if os.path.islink(unit_file):
+            unit_name = os.path.basename(unit_file)
+            if unit_name not in active_skipped:
+                try:
+                    os.unlink(unit_file)
+                    logger.info("Removed stale symlink: %s", unit_file)
+                except OSError as e:
+                    logger.warning("Failed to remove symlink %s: %s", unit_file, e)
+
+    # Clean up sidecar files from generated_units_dir
+    for pass_file in glob.glob(os.path.join(generated_units_dir, "satpi-pass-*.pass.json")):
         try:
-            os.remove(path)
-            logger.info("Removed old unit file: %s", path)
+            os.remove(pass_file)
+            logger.info("Removed old pass sidecar: %s", pass_file)
         except FileNotFoundError:
             pass
-        if os.path.exists(sidecar):
-            try:
-                os.remove(sidecar)
-            except OSError:
-                pass
-
 
 def create_units(
     generated_units_dir: str,
@@ -414,24 +419,36 @@ def create_units(
         created.append((service_name, timer_name, service_path, timer_path))
     return created
 
-
 def link_and_enable_units(created_units: Sequence[Tuple[str, str, str, str]]) -> None:
     if not created_units:
         run(["sudo", "systemctl", "daemon-reload"])
         return
 
-    link_args = ["sudo", "systemctl", "link"]
+    # Link each unit individually to avoid the whole command failing if one already exists
+    linked_count = 0
     for _, _, service_path, timer_path in created_units:
-        link_args.extend([service_path, timer_path])
-    run(link_args)
+        for path in [service_path, timer_path]:
+            # Use --force to overwrite existing symlinks from old path locations
+            result = run(["sudo", "systemctl", "link", "--force", path], check=False)
+            if result.returncode == 0:
+                linked_count += 1
+            else:
+                logger.warning("Failed to link %s", path)
 
+    if linked_count == 0:
+        logger.error("No units were successfully linked")
+        raise RuntimeError("Failed to link any systemd units")
+
+    # Reload daemon
     run(["sudo", "systemctl", "daemon-reload"])
 
-    enable_args = ["sudo", "systemctl", "enable", "--now"]
-    for _, timer_name, _, _ in created_units:
-        enable_args.append(timer_name)
-    run(enable_args)
+    # Enable and start timers
+    for _, _, _, timer_path in created_units:
+        timer_name = Path(timer_path).name
+        run(["sudo", "systemctl", "enable", timer_name], check=False)
+        run(["sudo", "systemctl", "start", timer_name], check=False)
 
+    logger.info("Linked and started %d timer/service pairs", len(created_units))
 
 def _notify_ha_scheduled(config: dict, base_dir: Path) -> None:
     ha_script = str(base_dir / "bin" / "homeassistant_notification.py")
@@ -447,12 +464,62 @@ def _notify_ha_scheduled(config: dict, base_dir: Path) -> None:
 
 # --- Main --------------------------------------------------------------------
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Generate systemd service and timer units for satellite pass reception",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+CONFIG.INI REQUIREMENTS:
+  [paths]
+    - pass_file: Input JSON file with predicted passes (from predict_passes.py output)
+    - generated_units_dir: Directory for systemd service/timer unit files
+    - python_bin: Path to Python interpreter
+    - log_dir: Directory for log files
+
+  [scheduling]
+    - pre_start: Seconds before pass start to begin reception (warmup time)
+    - post_stop: Seconds after pass end to stop reception
+
+  [systemd]
+    - service_user: Optional user account for running receiver service
+
+  [satellites]
+    - pass_direction: Direction filter for each satellite (default: "all")
+      Valid values: north, northeast, east, southeast, south, southwest, west, 
+                   northwest, north_to_south, east_to_west, etc.
+
+OUTPUT FILES:
+  - Systemd service units: /etc/systemd/system/satpi-pass-*.service
+  - Systemd timer units: /etc/systemd/system/satpi-pass-*.timer
+  - Pass sidecar data: {generated_units_dir}/satpi-pass-*.pass.json
+  - Log file: {log_dir}/schedule_passes.log
+
+BEHAVIOR:
+  - Reads predicted passes from JSON file
+  - Filters out past passes (with grace period for recently-started passes)
+  - Filters by pass direction per satellite
+  - Removes outdated/inactive units from systemd
+  - Creates new service+timer pairs for each future pass
+  - Writes pass metadata to sidecar JSON files
+  - Enables and starts timer units via systemctl
+  - Warns on overlapping pass windows
+  - Requires passwordless sudo for systemctl commands
+
+PROTOCOL:
+  Each receiver service is invoked as:
+    python_bin receiver_script.py --pass-file <sidecar_json_path>
+  The sidecar contains all pass data (satellite, frequency, times, etc.)
+        """
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
+    parse_args()  # Process --help / -h if requested
     base_dir = Path(__file__).resolve().parent.parent
     config_path = base_dir / "config" / "config.ini"
-
     try:
-        config = load_config(str(config_path))
+        config = read_config(str(config_path))
     except ConfigError as e:
         print(f"[schedule] CONFIG ERROR: {e}", file=sys.stderr)
         return 2

@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import sys
+import argparse
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -26,8 +27,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from skyfield.api import Loader, wgs84
 from skyfield.sgp4lib import EarthSatellite
 
-from load_config import load_config, ConfigError
-
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
+from read_config import read_config, ConfigError
 
 # --- Constants ---------------------------------------------------------------
 
@@ -312,29 +315,66 @@ def write_passes_json(pass_file: str, passes: Sequence[Dict[str, Any]]) -> None:
 # --- Main --------------------------------------------------------------------
 
 def _prediction_window_hours(scheduling: Dict[str, Any]) -> int:
-    """Read the prediction horizon from config, accepting the legacy name.
+    """Read the prediction horizon from config (hours into the future)."""
+    return int(scheduling.get("pass_max_prediction_hours", 24))
 
-    The legacy key `max_pass_age_hours` is misleading — the value is the
-    *future* horizon for pass prediction, not the age of stale data. Prefer
-    `prediction_window_hours` going forward; we keep the old key as fallback.
-    """
-    if "prediction_window_hours" in scheduling:
-        return int(scheduling["prediction_window_hours"])
-    if "max_pass_age_hours" in scheduling:
-        logger.warning(
-            "scheduling.max_pass_age_hours is deprecated; "
-            "rename it to scheduling.prediction_window_hours in your config."
-        )
-        return int(scheduling["max_pass_age_hours"])
-    raise ConfigError("scheduling.prediction_window_hours is required")
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Predict upcoming satellite passes for the configured ground station",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+CONFIG.INI REQUIREMENTS:
+  [qth]
+    - latitude: Ground station latitude (degrees)
+    - longitude: Ground station longitude (degrees)
+    - altitude: Ground station altitude (meters)
+
+  [scheduling]
+    - pass_max_prediction_hours: Prediction window in hours (default: 24)
+
+  [paths]
+    - tle_file: Input TLE file path (from update_tle.py output)
+    - pass_file: Output JSON file with computed passes
+    - log_dir: Directory for log files
+
+  [satellites]
+    - enabled: Boolean flag to enable/disable satellite
+    - name: Satellite name (must match TLE)
+    - min_elevation: Minimum elevation angle in degrees for reception
+    - frequency: Receive frequency in Hz
+    - bandwidth: Receive bandwidth in Hz
+    - pipeline: Pipeline name for reception processing
+
+OUTPUT FILES:
+  - Passes JSON: {pass_file} (sorted by start time, includes:
+      * start/end times (UTC ISO format)
+      * max elevation and time of maximum
+      * AOS/LOS azimuths (degrees)
+      * pass direction (north_to_south, southwest_to_northeast, etc.)
+      * frequency, bandwidth, pipeline info
+  - Log file: {log_dir}/predict_passes.log
+  - Skyfield cache: ~/.cache/satpi/skyfield/ (ephemeris and leap-second data)
+
+BEHAVIOR:
+  - Reads TLE file and builds satellite map
+  - Computes all passes within prediction window
+  - Filters by min_elevation per satellite
+  - Calculates azimuth direction (8-way compass)
+  - Falls back to builtin Skyfield data if download fails
+  - Warns if no passes found in window (suggests lowering min_elevation)
+        """
+    )
+    return parser.parse_args()
 
 
 def main() -> int:
+    parse_args()  # Process --help / -h if requested
     base_dir = Path(__file__).resolve().parent.parent
     config_path = base_dir / "config" / "config.ini"
+    # ... (rest unchanged)
 
     try:
-        config = load_config(str(config_path))
+        config = read_config(str(config_path))
     except ConfigError as e:
         print(f"[predict] CONFIG ERROR: {e}", file=sys.stderr)
         return 2
