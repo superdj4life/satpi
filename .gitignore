@@ -21,8 +21,15 @@ testdata/
 CLAUDE.md
 de421.bsp
 bin/output/
+agents.md
+SKILL.md
+n8n-architect.agent.md
+ai-contect.json
 
 # Local-only project rules for Claude — never publish
 /CLAUDE.md
 config/*.backup.*
 results/generated_units/
+.agents/*
+.github/*
+.n8nac/*
