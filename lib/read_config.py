@@ -199,6 +199,7 @@ def read_config(path: str) -> Dict[str, Any]:
         cfg["systemd"] = _parse_systemd(parser)
         cfg["reception_setup"] = _parse_reception_setup(parser)
         cfg["optimize_reception"] = _parse_optimize_reception(parser)
+        cfg["ha_mqtt"] = _parse_ha_mqtt(parser)
         if parser.has_section("noise_floor"):
             cfg["noise_floor"] = _parse_noise_floor(parser)
         cfg["processing_thresholds"] = _parse_processing_thresholds(parser, errors)
@@ -451,6 +452,26 @@ def _parse_optimize_reception(p: configparser.ConfigParser) -> Dict[str, Any]:
         "elevation_band_4_max": i("elevation_band_4_max", 65),
         "elevation_band_5_max": i("elevation_band_5_max", 80),
         "output_dir": p.get("optimize_reception", "output_dir", fallback="").strip() or None,
+    }
+
+
+def _parse_ha_mqtt(p: configparser.ConfigParser) -> Dict[str, Any]:
+    if not p.has_section("ha_mqtt"):
+        return {"enabled": False}
+    return {
+        "enabled": p.getboolean("ha_mqtt", "enabled", fallback=False),
+        "host": p.get("ha_mqtt", "host", fallback="").strip(),
+        "port": p.getint("ha_mqtt", "port", fallback=1883),
+        "username": p.get("ha_mqtt", "username", fallback="").strip(),
+        "password": p.get("ha_mqtt", "password", fallback="").strip(),
+        "tls": p.getboolean("ha_mqtt", "tls", fallback=False),
+        "keepalive": p.getint("ha_mqtt", "keepalive", fallback=60),
+        "base_topic": p.get("ha_mqtt", "base_topic", fallback="satpi").strip().rstrip("/"),
+        "discovery_prefix": p.get("ha_mqtt", "discovery_prefix", fallback="homeassistant").strip().rstrip("/"),
+        "device_id": p.get("ha_mqtt", "device_id", fallback="satpi").strip(),
+        "device_name": p.get("ha_mqtt", "device_name", fallback="satpi").strip(),
+        "smb_host": p.get("ha_mqtt", "smb_host", fallback="").strip(),
+        "smb_skyplots_share": p.get("ha_mqtt", "smb_skyplots_share", fallback="skyplots").strip(),
     }
 
 
