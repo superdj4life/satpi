@@ -71,6 +71,11 @@ KNOWN_KEYS: Dict[str, Set[str]] = {
         "elevation_band_4_max", "elevation_band_5_max",
         "output_dir",
     },
+    "ha_mqtt": {
+        "enabled", "host", "port", "username", "password", "tls", "keepalive",
+        "base_topic", "discovery_prefix", "device_id", "device_name",
+        "smb_host", "smb_skyplots_share",
+    },
     "noise_floor": {
         "measurement_duration", "schedule_minute",
         "center_freq", "bandwidth", "bin_size",
