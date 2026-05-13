@@ -12,6 +12,7 @@
 # Project: Autonomous, Config-driven satellite reception pipeline for Raspberry Pi
 
 import argparse
+import configparser
 import json
 import logging
 import os
@@ -22,12 +23,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
-
-from load_config import load_config, ConfigError
-
 try:
     import paho.mqtt.client as mqtt
 except ImportError:
@@ -35,6 +30,107 @@ except ImportError:
     sys.exit(1)
 
 logger = logging.getLogger("satpi.ha_notify")
+
+
+# ==============================
+# CONFIG ERROR
+# ==============================
+
+class ConfigError(Exception):
+    pass
+
+
+# ==============================
+# CONFIG LOADER
+# ==============================
+
+def _load_config(config_path: str) -> dict:
+    """Read only the sections this script needs from config.ini directly."""
+    if not os.path.exists(config_path):
+        raise ConfigError(f"Config file not found: {config_path}")
+
+    parser = configparser.ConfigParser(
+        inline_comment_prefixes=(";", "#"),
+        interpolation=None,
+    )
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            parser.read_file(f)
+    except OSError as e:
+        raise ConfigError(f"Cannot read config {config_path}: {e}") from e
+    except configparser.Error as e:
+        raise ConfigError(f"Invalid config syntax in {config_path}: {e}") from e
+
+    errors: list[str] = []
+
+    # --- [ha_mqtt] ---
+    if not parser.has_section("ha_mqtt"):
+        raise ConfigError("Missing required section: [ha_mqtt]")
+
+    enabled = parser.getboolean("ha_mqtt", "enabled", fallback=False)
+
+    host = parser.get("ha_mqtt", "host", fallback="").strip()
+    if enabled and not host:
+        errors.append("[ha_mqtt] host is required when enabled = true")
+
+    try:
+        port = parser.getint("ha_mqtt", "port", fallback=1883)
+        if not 1 <= port <= 65535:
+            errors.append(f"[ha_mqtt] port {port} is out of range (1–65535)")
+    except ValueError:
+        errors.append("[ha_mqtt] port must be an integer")
+        port = 1883
+
+    base_topic = parser.get("ha_mqtt", "base_topic", fallback="satpi").strip().rstrip("/")
+    if enabled and not base_topic:
+        errors.append("[ha_mqtt] base_topic is required when enabled = true")
+
+    device_id = parser.get("ha_mqtt", "device_id", fallback="satpi").strip()
+    if enabled and not device_id:
+        errors.append("[ha_mqtt] device_id is required when enabled = true")
+
+    if errors:
+        raise ConfigError(
+            "Config problems in {}:\n  - {}".format(config_path, "\n  - ".join(errors))
+        )
+
+    # --- [station] ---
+    timezone_str = parser.get("station", "timezone", fallback="UTC").strip()
+
+    # --- [paths] ---
+    base_dir = os.path.abspath(
+        parser.get("paths", "base_dir", fallback="").strip() or str(Path(__file__).resolve().parent.parent)
+    )
+
+    def _resolve(key: str, fallback: str) -> str:
+        val = parser.get("paths", key, fallback=fallback).strip() or fallback
+        return val if os.path.isabs(val) else os.path.abspath(os.path.join(base_dir, val))
+
+    return {
+        "station": {
+            "timezone": timezone_str,
+        },
+        "paths": {
+            "base_dir": base_dir,
+            "pass_file": _resolve("pass_file", "results/passes/passes.json"),
+        },
+        "ha_mqtt": {
+            "enabled": enabled,
+            "host": host,
+            "port": port,
+            "username": parser.get("ha_mqtt", "username", fallback="").strip(),
+            "password": parser.get("ha_mqtt", "password", fallback="").strip(),
+            "tls": parser.getboolean("ha_mqtt", "tls", fallback=False),
+            "keepalive": parser.getint("ha_mqtt", "keepalive", fallback=60),
+            "base_topic": base_topic,
+            "discovery_prefix": parser.get(
+                "ha_mqtt", "discovery_prefix", fallback="homeassistant"
+            ).strip().rstrip("/"),
+            "device_id": device_id,
+            "device_name": parser.get("ha_mqtt", "device_name", fallback="satpi").strip(),
+        },
+    }
+
 
 # ==============================
 # MQTT TOPIC HELPERS
@@ -547,7 +643,7 @@ def main() -> int:
     config_path = get_config_path(args.config)
 
     try:
-        cfg = load_config(str(config_path))
+        cfg = _load_config(str(config_path))
     except ConfigError as e:
         logger.error("CONFIG ERROR: %s", e)
         return 1
