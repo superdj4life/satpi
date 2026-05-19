@@ -54,6 +54,7 @@ KNOWN_KEYS: Dict[str, Set[str]] = {
     },
     "notify": {"enabled", "mail_to", "mail_subject_prefix"},
     "systemd": {"service_user"},
+    "testing": {"duration_seconds"},
     "reception_setup": {
         "antenna_type", "antenna_location", "antenna_orientation",
         "lna", "rf_filter", "feedline", "sdr", "raspberry_pi",
@@ -94,7 +95,7 @@ KNOWN_KEYS: Dict[str, Set[str]] = {
 # Satellite section keys (dynamic section names)
 SATELLITE_KEYS: Set[str] = {
     "enabled", "norad_id", "min_elevation_deg", "frequency", "bandwidth",
-    "pipeline", "pass_direction",
+    "pipeline", "pass_direction", "pass_timeslot",
 }
 
 VALID_DIRECTIONS: Set[str] = {
@@ -104,6 +105,8 @@ VALID_DIRECTIONS: Set[str] = {
     "southwest_to_northeast", "southeast_to_northwest",
     "northwest_to_southeast", "northeast_to_southwest",
 }
+
+VALID_TIMESLOTS_PRESETS: Set[str] = {"all", "day", "night"}
 
 VALID_SCHEDULING_FREQUENCIES: Set[str] = {"HOURLY", "DAILY", "WEEKLY"}
 VALID_WEEKDAYS: Set[str] = {
@@ -197,6 +200,7 @@ def read_config(path: str) -> Dict[str, Any]:
         cfg["copytarget"] = _parse_copytarget(parser)
         cfg["notify"] = _parse_notify(parser)
         cfg["systemd"] = _parse_systemd(parser)
+        cfg["testing"] = _parse_testing(parser)
         cfg["reception_setup"] = _parse_reception_setup(parser)
         cfg["optimize_reception"] = _parse_optimize_reception(parser)
         cfg["ha_mqtt"] = _parse_ha_mqtt(parser)
@@ -244,7 +248,7 @@ def _parse_qth(p: configparser.ConfigParser, errors: List[str]) -> Dict[str, Any
 
 
 def _parse_paths(p: configparser.ConfigParser) -> Dict[str, Any]:
-    base_dir = os.path.abspath(p.get("paths", "base_dir").strip())
+    base_dir = os.path.abspath(os.path.expanduser(p.get("paths", "base_dir").strip()))
 
     def rel(key: str, fallback: str = "") -> str:
         return _resolve_path(base_dir, p.get("paths", key, fallback=fallback))
@@ -319,6 +323,29 @@ def _parse_satellites(
                 errors.append(f"satellite '{name}': invalid pass_direction '{direction}'")
                 direction = "all"
 
+            # Parse pass_timeslot
+            timeslot = s.get("pass_timeslot", "all").strip().lower()
+            if timeslot not in VALID_TIMESLOTS_PRESETS:
+                # Check if it's a valid time range format HHmm-HHmm
+                if "-" in timeslot:
+                    try:
+                        parts = timeslot.split("-")
+                        if len(parts) == 2:
+                            start_hm = int(parts[0])
+                            end_hm = int(parts[1])
+                            if not (0 <= start_hm <= 2359 and 0 <= end_hm <= 2359):
+                                errors.append(f"satellite '{name}': invalid pass_timeslot time range '{timeslot}'")
+                                timeslot = "all"
+                        else:
+                            errors.append(f"satellite '{name}': invalid pass_timeslot format '{timeslot}'")
+                            timeslot = "all"
+                    except ValueError:
+                        errors.append(f"satellite '{name}': invalid pass_timeslot format '{timeslot}'")
+                        timeslot = "all"
+                else:
+                    errors.append(f"satellite '{name}': invalid pass_timeslot '{timeslot}'")
+                    timeslot = "all"
+
             # Parse other fields
             enabled = s.getboolean("enabled", fallback=True)
             min_elevation = s.getint("min_elevation_deg", fallback=0)
@@ -333,6 +360,7 @@ def _parse_satellites(
                 "bandwidth": bandwidth_hz,
                 "pipeline": pipeline,
                 "pass_direction": direction,
+                "pass_timeslot": timeslot,
             })
 
         except (configparser.NoOptionError, ValueError) as e:
@@ -416,6 +444,12 @@ def _parse_systemd(p: configparser.ConfigParser) -> Dict[str, Any]:
     if user is not None:
         user = user.strip() or None
     return {"service_user": user}
+
+
+def _parse_testing(p: configparser.ConfigParser) -> Dict[str, Any]:
+    return {
+        "duration_seconds": p.getint("testing", "duration_seconds", fallback=60),
+    }
 
 
 def _parse_reception_setup(p: configparser.ConfigParser) -> Dict[str, Any]:

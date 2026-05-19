@@ -4,13 +4,8 @@ results/tle/*
 !results/tle/.gitkeep
 results/passes/*
 !results/passes/.gitkeep
-results/captures/*
-!results/captures/.gitkeep
-results/optimization/*
-!results/optimization/.gitkeep
 results/reports/*
 !results/reports/.gitkeep
-systemd/generated/
 systemd/satpi-refresh.service
 systemd/satpi-refresh.timer
 __pycache__/
