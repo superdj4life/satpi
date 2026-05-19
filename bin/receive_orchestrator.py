@@ -418,7 +418,7 @@ def process_scheduled_passes(config: Dict[str, Any], testmode: bool = False) -> 
 
     Returns: exit code
     """
-    logger.info("─" * 60)
+    logger.info("-" * 60)
     logger.info("Checking for scheduled passes")
 
     passes = load_passes_to_schedule(config)
@@ -433,7 +433,7 @@ def process_scheduled_passes(config: Dict[str, Any], testmode: bool = False) -> 
         satellite = pass_data.get("satellite", "UNKNOWN")
         pass_start = pass_data.get("start", "?")
 
-        logger.info("─" * 60)
+        logger.info("-" * 60)
         logger.info("Pass %d/%d: %s at %s", i, len(passes), satellite, pass_start)
 
         # Wait until pass start time (skip in test mode)
@@ -476,7 +476,7 @@ def process_scheduled_passes(config: Dict[str, Any], testmode: bool = False) -> 
 
         logger.info("Pass %d completed", i)
 
-    logger.info("─" * 60)
+    logger.info("-" * 60)
     if failed_count > 0:
         logger.error("Completed with %d failure(s)", failed_count)
         return 1
