@@ -48,7 +48,9 @@ KNOWN_KEYS: Dict[str, Set[str]] = {
         "pre_start_seconds", "post_stop_seconds", "pass_max_prediction_hours",
     },
     "network": {"tle_url", "tle_timeout_seconds", "api_key", "tle_format"},
-    "decode": {"min_cadu_size_bytes", "success_dir_relpath"},
+    "decode": {"enabled", "min_cadu_size_bytes", "success_dir_relpath"},
+    "database": {"enabled"},
+    "plots": {"enabled"},
     "copytarget": {
         "enabled", "type", "rclone_remote", "rclone_dir", "rclone_reports_dir", "create_link",
     },
@@ -192,6 +194,8 @@ def read_config(path: str) -> Dict[str, Any]:
         cfg["scheduling"] = _parse_scheduling(parser, errors)
         cfg["network"] = _parse_network(parser, errors)
         cfg["decode"] = _parse_decode(parser)
+        cfg["database"] = _parse_database(parser)
+        cfg["plots"] = _parse_plots(parser)
         cfg["copytarget"] = _parse_copytarget(parser)
         cfg["notify"] = _parse_notify(parser)
         cfg["systemd"] = _parse_systemd(parser)
@@ -409,10 +413,26 @@ def _parse_network(p: configparser.ConfigParser, errors: List[str]) -> Dict[str,
 
 def _parse_decode(p: configparser.ConfigParser) -> Dict[str, Any]:
     return {
+        # Local compute step (no external side effect) — default ON.
+        # Opt-out via [decode] enabled = false.
+        "enabled": p.getboolean("decode", "enabled", fallback=True),
         "min_cadu_size_bytes": p.getint("decode", "min_cadu_size_bytes", fallback=1_048_576),
         "success_dir_relpath": p.get("decode", "success_dir_relpath", fallback="MSU-MR"),
     }
 
+
+def _parse_database(p: configparser.ConfigParser) -> Dict[str, Any]:
+    # Local compute step — default ON.
+    return {
+        "enabled": p.getboolean("database", "enabled", fallback=True),
+    }
+
+
+def _parse_plots(p: configparser.ConfigParser) -> Dict[str, Any]:
+    # Local compute step — default ON.
+    return {
+        "enabled": p.getboolean("plots", "enabled", fallback=True),
+    }
 
 def _parse_copytarget(p: configparser.ConfigParser) -> Dict[str, Any]:
     return {
