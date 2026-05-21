@@ -118,6 +118,47 @@ nano config/config.ini
 
 Save and exit nano with `Ctrl+O`, `Enter`, `Ctrl+X`.
 
+### TLE data source
+
+satpi downloads orbital data (TLE) once a day to predict satellite passes.
+Two sources are supported — choose the one that works for your network.
+
+**Option A: Celestrak** (no account needed)
+
+First test if Celestrak is reachable from your Raspberry Pi:
+
+```bash
+curl --max-time 10 "https://celestrak.org/NORAD/elements/gp.php?CATNR=59051&FORMAT=json"
+```
+
+If you see JSON output, set this in `config/config.ini`:
+
+```ini
+[network]
+tle_url    = https://celestrak.org/NORAD/elements/gp.php?GROUP=weather&FORMAT=json
+tle_format = GP_JSON
+api_key    =
+```
+
+If the command times out, your IP is blocked by Celestrak.
+You can request unblocking by e-mail: **TS.Kelso@celestrak.org**
+(mention that it is a residential satellite reception system, not a scraper).
+Use Option B in the meantime.
+
+**Option B: N2YO** (free account required)
+
+Register at [n2yo.com](https://www.n2yo.com/login/register.php) and copy your API key.
+Then set this in `config/config.ini`:
+
+```ini
+[network]
+tle_url    = https://api.n2yo.com/rest/v1/satellite/tle/
+tle_format = JSON
+api_key    = YOUR-N2YO-API-KEY
+```
+
+---
+
 Configure rclone for cloud-storage upload:
 
 ```bash

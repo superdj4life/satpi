@@ -148,6 +148,103 @@ def download_tle_n2yo_multi(api_key: str, target: str, satellites: List[dict]) -
         raise RuntimeError("TLE file is empty")
 
 
+def download_tle_celestrak_gp_json(
+    url: str, target: str, satellites: List[dict]
+) -> None:
+    """Download TLEs from Celestrak GP JSON API and write classic 3-line TLE format.
+
+    Celestrak GP JSON is an array of objects, each containing:
+      OBJECT_NAME, NORAD_CAT_ID, TLE_LINE1, TLE_LINE2, EPOCH, ...
+
+    Satellites are matched by NORAD_CAT_ID (preferred) with a name fallback.
+    Output is written as classic 3-line TLE (name / line1 / line2).
+
+    Example URLs:
+      https://celestrak.org/NORAD/elements/gp.php?GROUP=weather&FORMAT=json
+      https://celestrak.org/NORAD/elements/gp.php?CATNR=59051&FORMAT=json
+    """
+    norad_id_map: dict = {
+        s["norad_id"]: s["name"]
+        for s in satellites
+        if s.get("norad_id")
+    }
+    name_map: dict = {
+        normalize_sat_name(s["name"]): s["name"]
+        for s in satellites
+    }
+
+    logger.info("Downloading Celestrak GP JSON from %s", url)
+    try:
+        with _build_session() as sess:
+            r = sess.get(url, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT))
+            r.raise_for_status()
+            data = r.json()
+    except requests.RequestException as e:
+        raise RuntimeError(f"Celestrak GP JSON download failed: {e}") from e
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Celestrak GP JSON parse error: {e}") from e
+
+    if not isinstance(data, list):
+        raise RuntimeError(
+            f"Celestrak GP JSON: expected a JSON array, got {type(data).__name__}. "
+            f"Check that FORMAT=json is appended to the URL."
+        )
+
+    logger.info("Celestrak GP JSON: %d entries in response", len(data))
+
+    matched_lines: List[str] = []
+    found_norad_ids: Set[int] = set()
+
+    for entry in data:
+        norad_id = entry.get("NORAD_CAT_ID")
+        obj_name = str(entry.get("OBJECT_NAME", "")).strip()
+        line1 = str(entry.get("TLE_LINE1", "")).strip()
+        line2 = str(entry.get("TLE_LINE2", "")).strip()
+
+        if not line1 or not line2:
+            logger.debug("Skipping entry without TLE lines: %s", obj_name)
+            continue
+
+        # Match by NORAD ID first (most reliable — name strings can vary between sources)
+        if norad_id in norad_id_map:
+            canonical_name = norad_id_map[norad_id]
+            matched_lines.append(f"{canonical_name}\n{line1}\n{line2}\n")
+            found_norad_ids.add(norad_id)
+            logger.debug("Matched by NORAD ID %s: %s", norad_id, canonical_name)
+            continue
+
+        # Fallback: match by normalised name
+        if normalize_sat_name(obj_name) in name_map:
+            canonical_name = name_map[normalize_sat_name(obj_name)]
+            matched_lines.append(f"{canonical_name}\n{line1}\n{line2}\n")
+            logger.debug("Matched by name: %s", canonical_name)
+
+    if not matched_lines:
+        raise RuntimeError(
+            f"No configured satellites found in Celestrak GP JSON response. "
+            f"Searched for NORAD IDs: {sorted(norad_id_map.keys())}. "
+            f"Response contained {len(data)} entries. "
+            f"Verify the URL covers your satellites "
+            f"(e.g. GROUP=weather or CATNR=<norad_id>)."
+        )
+
+    with open(target, "w", encoding="utf-8") as f:
+        f.writelines(matched_lines)
+
+    if not os.path.exists(target) or os.path.getsize(target) == 0:
+        raise RuntimeError("Celestrak GP JSON: output file is empty after write")
+
+    missing_ids = set(norad_id_map.keys()) - found_norad_ids
+    if missing_ids:
+        missing_names = [norad_id_map[n] for n in sorted(missing_ids)]
+        logger.warning(
+            "Configured satellites not found in GP JSON response: %s", missing_names
+        )
+    logger.info(
+        "Celestrak GP JSON: wrote %d satellite(s) to %s", len(matched_lines), target
+    )
+
+
 def download_tle(url: str, target: str, tle_format: str = "TXT") -> None:
     """Download TLE data and save to target. Handles JSON and TXT formats."""
     try:
@@ -361,7 +458,10 @@ def parse_args():
 CONFIG.INI REQUIREMENTS:
   [network]
     - tle_url: URL of the TLE source (e.g., Celestrak or N2YO API endpoint)
-    - tle_format: Format of TLE data ('TXT' or 'JSON', default: 'TXT')
+    - tle_format: Format of TLE data ('TXT', 'JSON', or 'GP_JSON', default: 'TXT')
+                TXT     = classic 3-line TLE (Celestrak, most sources)
+                JSON    = N2YO per-satellite JSON API
+                GP_JSON = Celestrak GP JSON array (requires FORMAT=json in URL)
     - api_key: (Optional) API key for N2YO service
 
   [paths]
@@ -426,11 +526,14 @@ def main() -> int:
     try:
         logger.info("Downloading TLE (format: %s)", tle_format)
         try:
-            if tle_format == "JSON" and api_key:
-                # Use N2YO multi-satellite download
+            if tle_format == "GP_JSON":
+                # Celestrak GP JSON array format
+                download_tle_celestrak_gp_json(tle_url, tmp_file, satellites)
+            elif tle_format == "JSON" and api_key:
+                # N2YO per-satellite JSON API
                 download_tle_n2yo_multi(api_key, tmp_file, satellites)
             else:
-                # Use direct URL download (TXT format, typically Celestrak)
+                # Classic 3-line TLE text (Celestrak TLE, or any other TXT source)
                 logger.info("Downloading from %s", tle_url)
                 download_tle(tle_url, tmp_file, tle_format)
 

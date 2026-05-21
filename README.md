@@ -482,7 +482,16 @@ docs/INSTALL.md
 
 Version
 
-Current documented release: v1.3.0
+Current documented release: v1.4.0
+
+Highlights of v1.4.0:
+	•	Celestrak GP JSON support (tle_format = GP_JSON) — no API key required
+	•	fix first_deframer_sync_delay_seconds always returning 0
+	•	fix median SNR/BER calculation for even-length sample sets
+	•	reception.json now includes pass geometry (AOS/LOS azimuth, direction, scheduled times)
+	•	HOURLY scheduling frequency now supported in generate_refresh_units.py
+	•	INSTALL.md: TLE source selection guide with Celestrak connectivity test
+	•	config.example.ini: documented all three TLE source options
 
 Highlights of v1.3.0:
 	•	unified plotting in plot_reception.py
