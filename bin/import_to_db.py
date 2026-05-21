@@ -308,7 +308,7 @@ def calculate_pass_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
     # Calculate sync metrics
     synced_samples = []
     was_synced = False
-    for s in samples:
+    for idx, s in enumerate(samples):
         deframer_state = str(s.get("deframer_state", "NOSYNC"))
         is_synced = (deframer_state == "SYNCED")
 
@@ -316,9 +316,9 @@ def calculate_pass_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
             synced_samples.append(s)
             metrics["total_deframer_synced_seconds"] += 1
 
-            # Record first sync delay
+            # Record first sync delay: number of samples before first SYNCED state
             if metrics["first_deframer_sync_delay_seconds"] is None:
-                metrics["first_deframer_sync_delay_seconds"] = len(synced_samples) - 1
+                metrics["first_deframer_sync_delay_seconds"] = idx
 
         # Count sync drops
         if was_synced and not is_synced:
@@ -338,11 +338,19 @@ def calculate_pass_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
 
         if snr_values:
             snr_values.sort()
-            metrics["median_snr_synced"] = snr_values[len(snr_values) // 2]
+            mid = len(snr_values) // 2
+            if len(snr_values) % 2 == 1:
+                metrics["median_snr_synced"] = snr_values[mid]
+            else:
+                metrics["median_snr_synced"] = (snr_values[mid - 1] + snr_values[mid]) / 2
 
         if ber_values:
             ber_values.sort()
-            metrics["median_ber_synced"] = ber_values[len(ber_values) // 2]
+            mid = len(ber_values) // 2
+            if len(ber_values) % 2 == 1:
+                metrics["median_ber_synced"] = ber_values[mid]
+            else:
+                metrics["median_ber_synced"] = (ber_values[mid - 1] + ber_values[mid]) / 2
 
     # Calculate peak SNR from all samples
     peak_snr = None

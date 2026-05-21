@@ -119,6 +119,10 @@ def build_on_calendar(frequency, update_time, weekday):
     """Build systemd OnCalendar value from config parameters."""
     hh, mm = update_time.split(":", 1)
 
+    if frequency == "HOURLY":
+        # Run every hour at the configured minute (hh is ignored for hourly)
+        return f"*-*-* *:{mm}:00"
+
     if frequency == "DAILY":
         return f"*-*-* {hh}:{mm}:00"
 
@@ -210,7 +214,7 @@ EXAMPLE:
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.parse_args()
+    return parser.parse_args()
     # Script reads all configuration from config.ini via read_config.py
 
 

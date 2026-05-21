@@ -11,8 +11,8 @@ Protocol change vs. previous version:
   arguments. Instead, each pass is written to a sidecar JSON file
   (<unit-basename>.pass.json) next to its unit file, and the service is
   invoked as:
-      ExecStart=<python> <receiver_script> --pass-file <json-path>
-  The receiver script must accept --pass-file.
+      ExecStart=<python> <receiver_script> --pass-id <pass_id>
+  The receiver script must accept --pass-id.
 
 Author: Andreas Horvath
 Project: Autonomous, config-driven satellite reception pipeline for Raspberry Pi
@@ -484,8 +484,8 @@ BEHAVIOR:
 
 PROTOCOL:
   Each receiver service is invoked as:
-    python_bin receiver_script.py --pass-file <sidecar_json_path>
-  The sidecar contains all pass data (satellite, frequency, times, etc.)
+    python_bin receiver_script.py --pass-id <pass_id>
+  The pass-id is looked up in passes.json by the receiver script.
         """
     )
     return parser.parse_args()
