@@ -28,6 +28,23 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from read_config import read_config, ConfigError
 
 
+def _fget(d: dict, key: str, default: float = 0.0) -> float:
+    """Get a float from a dict, using default for both absent and None values.
+
+    dict.get(key, default) only falls back when the key is missing; if the key
+    exists with a JSON null (None) value it returns None, causing float() to
+    raise TypeError.  This helper handles both cases correctly.
+    """
+    v = d.get(key)
+    return float(v) if v is not None else default
+
+
+def _iget(d: dict, key: str, default: int = 0) -> int:
+    """Same as _fget but returns int."""
+    v = d.get(key)
+    return int(v) if v is not None else default
+
+
 def draw_progress_bar(current: int, total: int, width: int = 20) -> str:
     """Draw a fixed-width progress bar using ASCII characters.
 
@@ -292,7 +309,7 @@ def calculate_pass_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
     culmination_idx = None
 
     for i, s in enumerate(samples):
-        elevation = float(s.get("elevation_deg", -1.0))
+        elevation = _fget(s, "elevation_deg", -1.0)
         if elevation >= 0:
             metrics["visible_sample_count"] += 1
             visible_samples.append(s)
@@ -302,8 +319,8 @@ def calculate_pass_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
 
     if culmination_idx is not None and culmination_idx < len(samples):
         s = samples[culmination_idx]
-        metrics["culmination_azimuth_deg"] = float(s.get("azimuth_deg", 0.0))
-        metrics["culmination_elevation_deg"] = float(s.get("elevation_deg", 0.0))
+        metrics["culmination_azimuth_deg"] = _fget(s, "azimuth_deg")
+        metrics["culmination_elevation_deg"] = _fget(s, "elevation_deg")
 
     # Calculate sync metrics
     synced_samples = []
@@ -331,8 +348,8 @@ def calculate_pass_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
         snr_values = []
         ber_values = []
         for s in synced_samples:
-            snr = float(s.get("snr_db", 0.0))
-            ber = float(s.get("ber", 0.0))
+            snr = _fget(s, "snr_db")
+            ber = _fget(s, "ber")
             snr_values.append(snr)
             ber_values.append(ber)
 
@@ -355,7 +372,7 @@ def calculate_pass_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
     # Calculate peak SNR from all samples
     peak_snr = None
     for s in samples:
-        peak = float(s.get("peak_snr_db", 0.0))
+        peak = _fget(s, "peak_snr_db")
         if peak_snr is None or peak > peak_snr:
             peak_snr = peak
     if peak_snr is not None:
@@ -404,9 +421,9 @@ def insert_pass(
             str(source_file),
             satellite,
             str(data.get("pipeline", "")),
-            int(data.get("frequency_hz", 0)),
-            int(data.get("bandwidth_hz", 0)),
-            float(data.get("gain", 0.0)),
+            _iget(data, "frequency_hz"),
+            _iget(data, "bandwidth_hz"),
+            _fget(data, "gain"),
             str(data.get("source_id", "")),
             1 if bool(data.get("bias_t", False)) else 0,
             str(data.get("pass_start", "")),
@@ -438,13 +455,13 @@ def insert_pass(
                 (
                     pass_id,
                     str(s["timestamp"]),
-                    float(s.get("snr_db", 0.0)),
-                    float(s.get("peak_snr_db", 0.0)),
-                    float(s.get("ber", 0.0)),
+                    _fget(s, "snr_db"),
+                    _fget(s, "peak_snr_db"),
+                    _fget(s, "ber"),
                     str(s.get("viterbi_state", "NOSYNC")),
                     str(s.get("deframer_state", "NOSYNC")),
-                    float(s.get("azimuth_deg", 0.0)),
-                    float(s.get("elevation_deg", 0.0)),
+                    _fget(s, "azimuth_deg"),
+                    _fget(s, "elevation_deg"),
                 )
             )
 
