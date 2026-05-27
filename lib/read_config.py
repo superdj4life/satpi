@@ -405,8 +405,10 @@ def _parse_network(p: configparser.ConfigParser, errors: List[str]) -> Dict[str,
         api_key = os.environ.get("SATPI_N2YO_API_KEY") or ""
 
     tle_format = p.get("network", "tle_format", fallback="TXT").upper()
-    if tle_format not in ("TXT", "JSON"):
-        errors.append(f"[network] tle_format must be 'TXT' or 'JSON', got '{tle_format}'")
+    if tle_format not in ("TXT", "JSON", "GP_JSON"):
+        errors.append(
+            f"[network] tle_format must be 'TXT', 'JSON', or 'GP_JSON', got '{tle_format}'"
+        )
         tle_format = "TXT"
 
     return {

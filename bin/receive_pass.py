@@ -317,6 +317,14 @@ def receive_satellite_pass(
             "source_id": source_id,
             "cadu_file": cadu_file if cadu_size_bytes > 0 else None,
             "cadu_size_bytes": cadu_size_bytes,
+            # Pass geometry and timing from passes.json (needed by import_to_db.py)
+            "pass_start": pass_data.get("start", ""),
+            "pass_end": pass_data.get("end", ""),
+            "scheduled_start": pass_data.get("start", ""),
+            "scheduled_end": pass_data.get("end", ""),
+            "aos_azimuth_deg": pass_data.get("aos_azimuth_deg"),
+            "los_azimuth_deg": pass_data.get("los_azimuth_deg"),
+            "direction": pass_data.get("direction", ""),
             "samples": samples,
         }
 

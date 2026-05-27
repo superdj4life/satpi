@@ -83,14 +83,11 @@ Project structure
 
 satpi/
 ├── bin/
-│   ├── export_reception_report_pdf.py
-│   ├── generate_refresh_units.py
-│   ├── import_reception_to_db.py
+│   │   ├── generate_refresh_units.py
+│   ├── import_to_db.py
 │   ├── init_reception_db.py
-│   ├── load_config.py
-│   ├── optimize_reception.py
-│   ├── optimize_reception_ai.py
-│   ├── plot_receptions.py
+│   │   ├── optimize_reception.py
+│   │   ├── plot_reception.py
 │   ├── predict_passes.py
 │   ├── query_reception_db.py
 │   ├── receive_pass.py
@@ -100,7 +97,7 @@ satpi/
 │   ├── config.ini
 │   └── config.example.ini
 ├── docs/
-│   ├── INSTALL_FOR_BEGINNERS.md
+│   ├── INSTALL.md
 │   └── images/
 ├── logs/
 ├── results/
@@ -120,7 +117,7 @@ satpi/
 
 File overview
 
-bin/load_config.py
+lib/read_config.py
 
 Loads, parses, and validates the central config.ini file. It resolves relative project paths against paths.base_dir and converts configuration values into typed Python data structures.
 
@@ -138,9 +135,9 @@ Reads the predicted pass data and generates one systemd service and one systemd 
 
 bin/receive_pass.py
 
-Executes one scheduled pass from start to finish. It prepares the pass-specific output directory, starts SatDump, records structured reception data into reception.json, imports metrics into SQLite, renders plots via plot_receptions.py, triggers decode, copies the results, and optionally sends a notification email.
+Executes one scheduled pass from start to finish. It prepares the pass-specific output directory, starts SatDump, records structured reception data into reception.json, imports metrics into SQLite, renders plots via plot_reception.py, triggers decode, copies the results, and optionally sends a notification email.
 
-bin/plot_receptions.py
+bin/plot_reception.py
 
 Creates plots directly from the SQLite reception database.
  • with --pass-id, it generates a single-pass skyplot and timechart
@@ -151,7 +148,7 @@ bin/init_reception_db.py
 
 Initializes the SQLite database schema used for reception history and analysis.
 
-bin/import_reception_to_db.py
+bin/import_to_db.py
 
 Imports pass-level metrics and setup information from reception.json into the SQLite reception database.
 
@@ -163,13 +160,7 @@ bin/optimize_reception.py
 
 Analyzes recorded reception data from SQLite and compares geometrically similar passes to evaluate reception performance.
 
-bin/optimize_reception_ai.py
 
-Builds on the optimizer output and produces an AI-assisted interpretation of reception quality trends.
-
-bin/export_reception_report_pdf.py
-
-Exports reception analysis results into PDF format.
 
 bin/generate_refresh_units.py
 
@@ -352,27 +343,24 @@ python3 bin/generate_refresh_units.py
 
 Import all reception JSON files into SQLite:
 
-python3 bin/import_reception_to_db.py --all
+python3 bin/import_to_db.py --all
 
 Create a combined skyplot from all recorded passes:
 
-python3 bin/plot_receptions.py
+python3 bin/plot_reception.py
 
 Create a combined skyplot for a specific satellite:
 
-python3 bin/plot_receptions.py --satellite "METEOR-M2 4"
+python3 bin/plot_reception.py --satellite "METEOR-M2 4"
 
 Create plots for one specific pass:
 
-python3 bin/plot_receptions.py --pass-id "2026-04-10_16-07-30_METEOR-M2_4"
+python3 bin/plot_reception.py --pass-id "2026-04-10_16-07-30_METEOR-M2_4"
 
 Run reception optimizer manually:
 
 python3 bin/optimize_reception.py --config config/config.ini
 
-Run AI-based optimizer analysis manually:
-
-python3 bin/optimize_reception_ai.py --config config/config.ini
 
 Output
 
@@ -454,7 +442,7 @@ Plots themselves are generated from the SQLite database, not directly from the J
 
 Plotting logic
 
-plot_receptions.py uses the SQLite database as the source of truth.
+plot_reception.py uses the SQLite database as the source of truth.
 
 Single-pass mode
 
@@ -493,16 +481,25 @@ If enabled in config.ini, satpi can:
 
 Documentation
 
-Beginner-oriented setup notes are available here:
+Installation guide:
 
-docs/INSTALL_FOR_BEGINNERS.md
+docs/INSTALL.md
 
 Version
 
-Current documented release: v1.3.0
+Current documented release: v1.4.0
+
+Highlights of v1.4.0:
+	•	Celestrak GP JSON support (tle_format = GP_JSON) — no API key required
+	•	fix first_deframer_sync_delay_seconds always returning 0
+	•	fix median SNR/BER calculation for even-length sample sets
+	•	reception.json now includes pass geometry (AOS/LOS azimuth, direction, scheduled times)
+	•	HOURLY scheduling frequency now supported in generate_refresh_units.py
+	•	INSTALL.md: TLE source selection guide with Celestrak connectivity test
+	•	config.example.ini: documented all three TLE source options
 
 Highlights of v1.3.0:
- • unified plotting in plot_receptions.py
+ • unified plotting in plot_reception.py
  • single-pass plots now read from SQLite instead of directly from JSON
  • combined plots and single-pass plots use the same database-backed workflow
  • reception setup data now includes sdr in the database schema and import path
