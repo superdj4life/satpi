@@ -79,7 +79,7 @@ def setup_logger(log_file: Optional[str] = None) -> None:
     logger.addHandler(ch)
 
     if log_file:
-        fh = logging.FileHandler(log_file)
+        fh = logging.FileHandler(log_file, encoding="utf-8")
         fh.setFormatter(fmt)
         logger.addHandler(fh)
 
@@ -91,7 +91,7 @@ def _pass_log_file(pass_dir: str) -> Iterator[str]:
     so each pass directory becomes self-contained forensics."""
     log_path = os.path.join(pass_dir, "post_processing.log")
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-    fh = logging.FileHandler(log_path)
+    fh = logging.FileHandler(log_path, encoding="utf-8")
     fh.setFormatter(fmt)
     logger.addHandler(fh)
     try:
