@@ -443,7 +443,7 @@ def send_notification(
     elif copy_ok and target:
         body_parts.append(f"Target: {target}")
     elif copy_was_requested:
-        body_parts.append("Copy failed — files local only")
+        body_parts.append("Copy failed -- files local only")
 
     body = "\n".join(body_parts) + "\n"
     mail_data = f"Subject: {subject}\n\n{body}"
@@ -453,6 +453,7 @@ def send_notification(
             [mail_bin, mail_to],
             input=mail_data,
             text=True,
+            encoding="utf-8",
             capture_output=True,
             timeout=MAIL_TIMEOUT_SECONDS,
         )
