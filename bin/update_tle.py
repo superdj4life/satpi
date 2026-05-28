@@ -15,12 +15,14 @@ Project: Autonomous, config-driven satellite reception pipeline for Raspberry Pi
 from __future__ import annotations
 
 import logging
+import math
 import os
 import shutil
 import sys
 import tempfile
 import time
 import argparse
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Iterable, List, Sequence, Set, Tuple
@@ -148,29 +150,137 @@ def download_tle_n2yo_multi(api_key: str, target: str, satellites: List[dict]) -
         raise RuntimeError("TLE file is empty")
 
 
+# ---------------------------------------------------------------------------
+# Celestrak GP JSON → classic TLE helpers
+# ---------------------------------------------------------------------------
+
+def _tle_checksum(line: str) -> int:
+    """TLE line checksum: sum of all digit characters plus 1 for each '-', mod 10."""
+    return sum(int(c) if c.isdigit() else (1 if c == "-" else 0) for c in line) % 10
+
+
+def _format_exp_notation(value: float) -> str:
+    """Format a float in TLE exponential notation (8 chars): [sign]NNNNN[sign]N.
+
+    Examples:
+        0          →  " 00000+0"
+        3.1151e-5  →  " 31151-4"   (0.31151 × 10^-4)
+       -1.1606e-5  →  "-11606-4"
+    """
+    if value == 0.0:
+        return " 00000+0"
+    sign = " " if value >= 0 else "-"
+    abs_val = abs(value)
+    exp = math.floor(math.log10(abs_val)) + 1          # 0.1 ≤ abs_val/10^exp < 1
+    mantissa_int = round(abs_val / (10.0 ** exp) * 1e5)
+    if mantissa_int >= 100000:                          # rounding overflow
+        mantissa_int //= 10
+        exp += 1
+    exp_sign = "+" if exp >= 0 else "-"
+    return f"{sign}{mantissa_int:05d}{exp_sign}{abs(exp)}"
+
+
+def _format_mean_motion_dot(value: float) -> str:
+    """Format MEAN_MOTION_DOT for TLE line 1 cols 34-43 (10 chars): [sign].NNNNNNNN.
+
+    GP JSON stores the value directly (same as TLE; no extra division needed).
+    """
+    sign = " " if value >= 0 else "-"
+    return f"{sign}.{round(abs(value) * 1e8):08d}"
+
+
+def _parse_intl_designator(object_id: str) -> str:
+    """Convert OBJECT_ID ('2024-039A') to TLE international designator (8 chars, left-justified).
+
+    '2024-039A' → '24039A  '
+    """
+    if not object_id:
+        return "        "
+    try:
+        parts = object_id.split("-", 1)
+        if len(parts) == 2:
+            yy = parts[0][-2:]        # last 2 digits of year
+            rest = parts[1]           # e.g. "039A"
+            return f"{yy}{rest:<6}"[:8]
+    except Exception:
+        pass
+    return "        "
+
+
+def _epoch_to_tle(epoch_str: str) -> str:
+    """Convert ISO 8601 epoch string to TLE epoch format YYDDD.DDDDDDDD (14 chars)."""
+    epoch_clean = epoch_str.rstrip("Z").split("+")[0]
+    try:
+        dt = datetime.strptime(epoch_clean, "%Y-%m-%dT%H:%M:%S.%f")
+    except ValueError:
+        dt = datetime.strptime(epoch_clean, "%Y-%m-%dT%H:%M:%S")
+    yy = dt.year % 100
+    day_of_year = dt.timetuple().tm_yday
+    frac = (dt.hour * 3600 + dt.minute * 60 + dt.second + dt.microsecond / 1e6) / 86400
+    return f"{yy:02d}{day_of_year + frac:012.8f}"
+
+
+def gp_json_to_tle_lines(entry: dict, canonical_name: str) -> Tuple[str, str, str]:
+    """Convert a Celestrak GP JSON entry to classic 3-line TLE.
+
+    GP JSON field values map directly to TLE values (no extra division needed).
+    Returns (name_line, line1, line2), each suitable for writing to a .tle file.
+
+    Verified against live Celestrak data for METEOR-M2 4 (NORAD 59051).
+    """
+    norad = int(entry["NORAD_CAT_ID"])
+    cls = str(entry.get("CLASSIFICATION_TYPE", "U"))[:1]
+    intl = _parse_intl_designator(str(entry.get("OBJECT_ID", "")))
+    epoch = _epoch_to_tle(str(entry["EPOCH"]))
+    mmdot = _format_mean_motion_dot(float(entry.get("MEAN_MOTION_DOT", 0)))
+    mmddt = _format_exp_notation(float(entry.get("MEAN_MOTION_DDOT", 0)))
+    bstar = _format_exp_notation(float(entry.get("BSTAR", 0)))
+    etype = int(entry.get("EPHEMERIS_TYPE", 0))
+    elset = int(entry.get("ELEMENT_SET_NO", 0))
+
+    incl = float(entry.get("INCLINATION", 0))
+    raan = float(entry.get("RA_OF_ASC_NODE", 0))
+    ecco = round(float(entry.get("ECCENTRICITY", 0)) * 1e7)
+    argp = float(entry.get("ARG_OF_PERICENTER", 0))
+    ma = float(entry.get("MEAN_ANOMALY", 0))
+    mm = float(entry.get("MEAN_MOTION", 0))
+    rev = int(entry.get("REV_AT_EPOCH", 0))
+
+    # Line 1 (68 chars before checksum digit)
+    l1 = (
+        f"1 {norad:05d}{cls} {intl:<8} {epoch} "
+        f"{mmdot} {mmddt} {bstar} {etype} {elset:4d}"
+    )
+    line1 = l1 + str(_tle_checksum(l1))
+
+    # Line 2 (68 chars before checksum digit)
+    l2 = (
+        f"2 {norad:05d} {incl:8.4f} {raan:8.4f} {ecco:07d} "
+        f"{argp:8.4f} {ma:8.4f} {mm:11.8f}{rev:5d}"
+    )
+    line2 = l2 + str(_tle_checksum(l2))
+
+    return canonical_name, line1, line2
+
+
 def download_tle_celestrak_gp_json(
     url: str, target: str, satellites: List[dict]
 ) -> None:
     """Download TLEs from Celestrak GP JSON API and write classic 3-line TLE format.
 
-    Celestrak GP JSON is an array of objects, each containing:
-      OBJECT_NAME, NORAD_CAT_ID, TLE_LINE1, TLE_LINE2, EPOCH, ...
+    Celestrak GP JSON (FORMAT=json) returns an array of GP objects with orbital
+    elements. TLE lines are reconstructed from these elements.
 
-    Satellites are matched by NORAD_CAT_ID (preferred) with a name fallback.
-    Output is written as classic 3-line TLE (name / line1 / line2).
+    Satellites are matched by NORAD_CAT_ID (primary) with name fallback.
 
-    Example URLs:
+    Example URL:
       https://celestrak.org/NORAD/elements/gp.php?GROUP=weather&FORMAT=json
-      https://celestrak.org/NORAD/elements/gp.php?CATNR=59051&FORMAT=json
     """
     norad_id_map: dict = {
-        s["norad_id"]: s["name"]
-        for s in satellites
-        if s.get("norad_id")
+        s["norad_id"]: s["name"] for s in satellites if s.get("norad_id")
     }
     name_map: dict = {
-        normalize_sat_name(s["name"]): s["name"]
-        for s in satellites
+        normalize_sat_name(s["name"]): s["name"] for s in satellites
     }
 
     logger.info("Downloading Celestrak GP JSON from %s", url)
@@ -187,7 +297,7 @@ def download_tle_celestrak_gp_json(
     if not isinstance(data, list):
         raise RuntimeError(
             f"Celestrak GP JSON: expected a JSON array, got {type(data).__name__}. "
-            f"Check that FORMAT=json is appended to the URL."
+            f"Verify FORMAT=json is in the URL."
         )
 
     logger.info("Celestrak GP JSON: %d entries in response", len(data))
@@ -198,51 +308,42 @@ def download_tle_celestrak_gp_json(
     for entry in data:
         norad_id = entry.get("NORAD_CAT_ID")
         obj_name = str(entry.get("OBJECT_NAME", "")).strip()
-        line1 = str(entry.get("TLE_LINE1", "")).strip()
-        line2 = str(entry.get("TLE_LINE2", "")).strip()
 
-        if not line1 or not line2:
-            logger.debug("Skipping entry without TLE lines: %s", obj_name)
-            continue
-
-        # Match by NORAD ID first (most reliable — name strings can vary between sources)
+        # Match by NORAD ID first (most reliable)
         if norad_id in norad_id_map:
             canonical_name = norad_id_map[norad_id]
-            matched_lines.append(f"{canonical_name}\n{line1}\n{line2}\n")
-            found_norad_ids.add(norad_id)
-            logger.debug("Matched by NORAD ID %s: %s", norad_id, canonical_name)
+        elif normalize_sat_name(obj_name) in name_map:
+            canonical_name = name_map[normalize_sat_name(obj_name)]
+        else:
             continue
 
-        # Fallback: match by normalised name
-        if normalize_sat_name(obj_name) in name_map:
-            canonical_name = name_map[normalize_sat_name(obj_name)]
-            matched_lines.append(f"{canonical_name}\n{line1}\n{line2}\n")
-            logger.debug("Matched by name: %s", canonical_name)
+        try:
+            name_line, line1, line2 = gp_json_to_tle_lines(entry, canonical_name)
+        except Exception as exc:
+            logger.warning("Skipping %s: TLE construction failed: %s", obj_name, exc)
+            continue
+
+        matched_lines.append(f"{name_line}\n{line1}\n{line2}\n")
+        found_norad_ids.add(norad_id)
+        logger.debug("Matched %s (NORAD %s)", canonical_name, norad_id)
 
     if not matched_lines:
         raise RuntimeError(
-            f"No configured satellites found in Celestrak GP JSON response. "
-            f"Searched for NORAD IDs: {sorted(norad_id_map.keys())}. "
-            f"Response contained {len(data)} entries. "
-            f"Verify the URL covers your satellites "
-            f"(e.g. GROUP=weather or CATNR=<norad_id>)."
+            f"No configured satellites found in Celestrak GP JSON response "
+            f"(searched NORAD IDs: {sorted(norad_id_map.keys())}, "
+            f"response had {len(data)} entries)."
         )
 
     with open(target, "w", encoding="utf-8") as f:
         f.writelines(matched_lines)
 
-    if not os.path.exists(target) or os.path.getsize(target) == 0:
-        raise RuntimeError("Celestrak GP JSON: output file is empty after write")
-
     missing_ids = set(norad_id_map.keys()) - found_norad_ids
     if missing_ids:
-        missing_names = [norad_id_map[n] for n in sorted(missing_ids)]
         logger.warning(
-            "Configured satellites not found in GP JSON response: %s", missing_names
+            "Satellites not found in GP JSON response: %s",
+            [norad_id_map[n] for n in sorted(missing_ids)],
         )
-    logger.info(
-        "Celestrak GP JSON: wrote %d satellite(s) to %s", len(matched_lines), target
-    )
+    logger.info("Celestrak GP JSON: wrote %d satellite(s) to %s", len(matched_lines), target)
 
 
 def download_tle(url: str, target: str, tle_format: str = "TXT") -> None:
@@ -527,13 +628,13 @@ def main() -> int:
         logger.info("Downloading TLE (format: %s)", tle_format)
         try:
             if tle_format == "GP_JSON":
-                # Celestrak GP JSON array format
+                # Celestrak GP JSON array — TLE lines are reconstructed from orbital elements
                 download_tle_celestrak_gp_json(tle_url, tmp_file, satellites)
             elif tle_format == "JSON" and api_key:
                 # N2YO per-satellite JSON API
                 download_tle_n2yo_multi(api_key, tmp_file, satellites)
             else:
-                # Classic 3-line TLE text (Celestrak TLE, or any other TXT source)
+                # Classic 3-line TLE text (Celestrak FORMAT=tle, or any other TXT source)
                 logger.info("Downloading from %s", tle_url)
                 download_tle(tle_url, tmp_file, tle_format)
 
