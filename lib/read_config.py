@@ -401,7 +401,7 @@ def _parse_network(p: configparser.ConfigParser, errors: List[str]) -> Dict[str,
     tle_format = p.get("network", "tle_format", fallback="TXT").upper()
     if tle_format not in ("TXT", "JSON", "GP_JSON"):
         errors.append(
-            f"[network] tle_format must be 'TXT', 'JSON', or 'GP_JSON', got '{tle_format}'"
+            f"[network] tle_format must be 'TXT', 'GP_JSON' (Celestrak) or 'JSON' (N2YO), got '{tle_format}'"
         )
         tle_format = "TXT"
 

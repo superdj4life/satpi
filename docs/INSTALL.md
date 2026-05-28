@@ -125,6 +125,9 @@ Two sources are supported — choose the one that works for your network.
 
 **Option A: Celestrak** (no account needed)
 
+Celestrak is phasing out the classic TLE text format in favour of their GP JSON format.
+satpi supports GP JSON natively and reconstructs TLE lines from the orbital elements.
+
 First test if Celestrak is reachable from your Raspberry Pi:
 
 ```bash
